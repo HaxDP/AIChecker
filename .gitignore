@@ -1,0 +1,64 @@
+# Build directories
+/build/
+/cmake-build-*/
+/out/
+/bin/
+/lib/
+
+# CMake generated files
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CTestTestfile.cmake
+compile_commands.json
+install_manifest.txt
+
+# Visual Studio generated files
+/.vs/
+*.VC.db
+*.VC.opendb
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.opendb
+ipch/
+
+# Build outputs / binaries
+*.obj
+*.o
+*.pch
+*.pdb
+*.idb
+*.ilk
+*.lib
+*.a
+*.dll
+*.so
+*.dylib
+*.exe
+*.exp
+
+# Common architecture output folders
+/x64/
+/x86/
+
+# Logs and temporary files
+*.log
+*.tmp
+*.temp
+*.cache
+
+# IDE/editor
+.vscode/
+.idea/
+
+# Runtime/editor state
+imgui.ini
+
+# Secrets / local credentials
+settings/google/credentials.json
+settings/google/access_token.txt
+settings/github/token.txt
+settings/**/token.txt
+settings/**/*credentials*.json
