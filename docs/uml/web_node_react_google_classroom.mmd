@@ -1,0 +1,326 @@
+classDiagram
+    direction LR
+
+    %% =============================
+    %% Frontend (React)
+    %% =============================
+    class AppShell {
+      +renderRoutes()
+      +provideSessionContext()
+    }
+
+    class AuthContext {
+      +user: UserProfile
+      +loginWithGoogle()
+      +logout()
+      +refreshSession()
+    }
+
+    class DashboardPage {
+      +loadOverview()
+      +renderCards()
+    }
+
+    class CoursesPage {
+      +loadCourses()
+      +selectCourse(courseId)
+    }
+
+    class CourseDetailsPage {
+      +loadStudents(courseId)
+      +loadTasks(courseId)
+      +syncCourseData(courseId)
+    }
+
+    class StudentsTable {
+      +render(students)
+      +search(query)
+      +filterByGroup(group)
+    }
+
+    class TasksTable {
+      +render(tasks)
+      +openTask(taskId)
+    }
+
+    class ApiClient {
+      +get(path)
+      +post(path, body)
+      +withAccessToken(token)
+    }
+
+    class AuthApi {
+      +getLoginUrl()
+      +exchangeCode(code)
+      +getMe()
+      +logout()
+    }
+
+    class ClassroomApi {
+      +getCourses()
+      +getCourseStudents(courseId)
+      +getCourseTasks(courseId)
+      +syncCourse(courseId)
+    }
+
+    %% =============================
+    %% Backend (Node.js)
+    %% =============================
+    class AuthController {
+      +startGoogleLogin()
+      +googleCallback(code)
+      +me()
+      +logout()
+    }
+
+    class ClassroomController {
+      +listCourses()
+      +listStudents(courseId)
+      +listTasks(courseId)
+      +syncCourse(courseId)
+    }
+
+    class AuthMiddleware {
+      +requireAuth(req,res,next)
+      +requireRole(role)
+    }
+
+    class AuthService {
+      +buildGoogleAuthUrl()
+      +signInWithGoogle(code)
+      +createSession(user)
+      +validateSession(token)
+    }
+
+    class ClassroomService {
+      +getCourses(userId)
+      +getStudents(courseId)
+      +getTasks(courseId)
+      +syncCourseAggregate(courseId)
+    }
+
+    class SyncRosterUseCase {
+      +execute(courseId, actorId)
+    }
+
+    class SyncTasksUseCase {
+      +execute(courseId, actorId)
+    }
+
+    class SyncSubmissionsUseCase {
+      +execute(courseId, actorId)
+    }
+
+    %% =============================
+    %% Domain / Ports (SOLID)
+    %% =============================
+    class IGoogleOAuthProvider {
+      <<interface>>
+      +buildAuthUrl()
+      +exchangeCodeForTokens(code)
+      +fetchGoogleUser(accessToken)
+    }
+
+    class IClassroomGateway {
+      <<interface>>
+      +fetchCourses(teacherId)
+      +fetchStudents(courseId)
+      +fetchCourseWork(courseId)
+      +fetchSubmissions(courseId, courseWorkId)
+    }
+
+    class IUserRepository {
+      <<interface>>
+      +findByGoogleId(googleId)
+      +save(user)
+      +findById(id)
+    }
+
+    class ICourseRepository {
+      <<interface>>
+      +upsert(course)
+      +findByTeacher(teacherId)
+      +findById(courseId)
+    }
+
+    class IStudentRepository {
+      <<interface>>
+      +upsertMany(students)
+      +findByCourse(courseId)
+    }
+
+    class ITaskRepository {
+      <<interface>>
+      +upsertMany(tasks)
+      +findByCourse(courseId)
+    }
+
+    class ISubmissionRepository {
+      <<interface>>
+      +upsertMany(submissions)
+      +findByTask(taskId)
+    }
+
+    class ISessionStore {
+      <<interface>>
+      +create(session)
+      +get(sessionId)
+      +revoke(sessionId)
+    }
+
+    class User {
+      +id: string
+      +googleId: string
+      +email: string
+      +name: string
+      +role: UserRole
+    }
+
+    class Course {
+      +id: string
+      +googleCourseId: string
+      +name: string
+      +section: string
+      +teacherId: string
+    }
+
+    class Student {
+      +id: string
+      +googleUserId: string
+      +fullName: string
+      +email: string
+      +githubLink: string
+      +courseId: string
+    }
+
+    class Task {
+      +id: string
+      +googleCourseWorkId: string
+      +title: string
+      +courseId: string
+      +dueDate: Date
+    }
+
+    class Submission {
+      +id: string
+      +studentId: string
+      +taskId: string
+      +state: string
+      +repoUrl: string
+      +createdAt: Date
+    }
+
+    %% =============================
+    %% Infrastructure Adapters
+    %% =============================
+    class GoogleOAuthAdapter {
+      +buildAuthUrl()
+      +exchangeCodeForTokens(code)
+      +fetchGoogleUser(accessToken)
+    }
+
+    class GoogleClassroomAdapter {
+      +fetchCourses(teacherId)
+      +fetchStudents(courseId)
+      +fetchCourseWork(courseId)
+      +fetchSubmissions(courseId, courseWorkId)
+    }
+
+    class JwtSessionStore {
+      +create(session)
+      +get(sessionId)
+      +revoke(sessionId)
+    }
+
+    class UserRepository {
+      +findByGoogleId(googleId)
+      +save(user)
+      +findById(id)
+    }
+
+    class CourseRepository {
+      +upsert(course)
+      +findByTeacher(teacherId)
+      +findById(courseId)
+    }
+
+    class StudentRepository {
+      +upsertMany(students)
+      +findByCourse(courseId)
+    }
+
+    class TaskRepository {
+      +upsertMany(tasks)
+      +findByCourse(courseId)
+    }
+
+    class SubmissionRepository {
+      +upsertMany(submissions)
+      +findByTask(taskId)
+    }
+
+    %% =============================
+    %% Frontend relationships
+    %% =============================
+    AppShell --> AuthContext
+    AppShell --> DashboardPage
+    AppShell --> CoursesPage
+    AppShell --> CourseDetailsPage
+    CourseDetailsPage --> StudentsTable
+    CourseDetailsPage --> TasksTable
+    AuthContext --> AuthApi
+    CoursesPage --> ClassroomApi
+    CourseDetailsPage --> ClassroomApi
+    AuthApi --> ApiClient
+    ClassroomApi --> ApiClient
+
+    %% =============================
+    %% Backend relationships
+    %% =============================
+    AuthController --> AuthService
+    ClassroomController --> ClassroomService
+    ClassroomController --> AuthMiddleware
+
+    AuthService --> IGoogleOAuthProvider
+    AuthService --> IUserRepository
+    AuthService --> ISessionStore
+
+    ClassroomService --> IClassroomGateway
+    ClassroomService --> ICourseRepository
+    ClassroomService --> IStudentRepository
+    ClassroomService --> ITaskRepository
+    ClassroomService --> ISubmissionRepository
+
+    ClassroomService --> SyncRosterUseCase
+    ClassroomService --> SyncTasksUseCase
+    ClassroomService --> SyncSubmissionsUseCase
+
+    SyncRosterUseCase --> IClassroomGateway
+    SyncRosterUseCase --> IStudentRepository
+
+    SyncTasksUseCase --> IClassroomGateway
+    SyncTasksUseCase --> ITaskRepository
+
+    SyncSubmissionsUseCase --> IClassroomGateway
+    SyncSubmissionsUseCase --> ISubmissionRepository
+
+    %% =============================
+    %% Port -> Adapter bindings
+    %% =============================
+    IGoogleOAuthProvider <|.. GoogleOAuthAdapter
+    IClassroomGateway <|.. GoogleClassroomAdapter
+    ISessionStore <|.. JwtSessionStore
+    IUserRepository <|.. UserRepository
+    ICourseRepository <|.. CourseRepository
+    IStudentRepository <|.. StudentRepository
+    ITaskRepository <|.. TaskRepository
+    ISubmissionRepository <|.. SubmissionRepository
+
+    %% =============================
+    %% Domain usage
+    %% =============================
+    ClassroomService --> Course
+    ClassroomService --> Student
+    ClassroomService --> Task
+    ClassroomService --> Submission
+    AuthService --> User

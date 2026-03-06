@@ -1,0 +1,133 @@
+classDiagram
+    direction LR
+
+    %% ===== Core Models =====
+    class AppState
+    class Submission
+    class AnalysisResult
+    class Assignment
+    class Student
+
+    %% ===== Observer Pattern =====
+    class IObserver {
+      <<interface>>
+      +OnEvent(text)
+    }
+
+    class EventBus {
+      +Subscribe(observer)
+      +Emit(message)
+    }
+
+    class AppController {
+      +LoadStudents()
+      +BuildSubmissions()
+      +RunAICheckOnly()
+      +RunPlagiarismCheckOnly()
+      +Analyze()
+      +SyncGrades()
+      +SendFeedbackEmails()
+      +ExportResultsCsv(path)
+      +ExportStudentReports(root)
+      +OnEvent(text)
+    }
+
+    IObserver <|.. AppController
+    EventBus --> IObserver : notifies
+    AppController --> EventBus : subscribes/emits
+
+    %% ===== Command Pattern =====
+    class IWorkflowCommand {
+      <<interface>>
+      +Name()
+      +Execute(state, bus)
+    }
+
+    class LoadStudentsCommand
+    class BuildSubmissionsCommand
+    class AnalyzeSubmissionsCommand
+    class AnalyzeAiOnlyCommand
+    class AnalyzePlagiarismOnlyCommand
+    class SyncGradesCommand
+    class SendEmailFeedbackCommand
+
+    IWorkflowCommand <|.. LoadStudentsCommand
+    IWorkflowCommand <|.. BuildSubmissionsCommand
+    IWorkflowCommand <|.. AnalyzeSubmissionsCommand
+    IWorkflowCommand <|.. AnalyzeAiOnlyCommand
+    IWorkflowCommand <|.. AnalyzePlagiarismOnlyCommand
+    IWorkflowCommand <|.. SyncGradesCommand
+    IWorkflowCommand <|.. SendEmailFeedbackCommand
+
+    AppController --> IWorkflowCommand : invokes commands
+
+    %% ===== Strategy Pattern =====
+    class IAnalysisStrategy {
+      <<interface>>
+      +Name()
+      +Analyze(submission)
+    }
+
+    class NgramSimilarityStrategy
+    class StylometryAIStrategy
+    class OllamaAIStrategy
+    class PlagiarismServiceStrategy
+    class PromptLeakHeuristicStrategy
+
+    IAnalysisStrategy <|.. NgramSimilarityStrategy
+    IAnalysisStrategy <|.. StylometryAIStrategy
+    IAnalysisStrategy <|.. OllamaAIStrategy
+    IAnalysisStrategy <|.. PlagiarismServiceStrategy
+    IAnalysisStrategy <|.. PromptLeakHeuristicStrategy
+
+    AnalyzeSubmissionsCommand --> IAnalysisStrategy : applies many
+    AnalyzeAiOnlyCommand --> IAnalysisStrategy : ai + heuristic
+    AnalyzePlagiarismOnlyCommand --> IAnalysisStrategy : plagiarism
+
+    %% ===== Factory (StrategyFactory) =====
+    class StrategyFactory {
+      +BuildDefault()
+      +BuildDefault(ollamaUrl, model, plagiarismUrl)
+    }
+
+    StrategyFactory ..> IAnalysisStrategy : creates list
+
+    %% ===== Integration Ports/Adapters =====
+    class IClassroomGateway {
+      <<interface>>
+      +FetchStudents(...)
+      +PushGrade(...)
+    }
+
+    class IEmailGateway {
+      <<interface>>
+      +SendFeedback(...)
+    }
+
+    class ClassroomGatewayStub
+    class EmailGatewayStub
+
+    IClassroomGateway <|.. ClassroomGatewayStub
+    IEmailGateway <|.. EmailGatewayStub
+
+    AppController --> IClassroomGateway : depends on abstraction
+    AppController --> IEmailGateway : depends on abstraction
+
+    %% ===== App-level DI policy =====
+    class AppControllerDependencies
+    class AppControllerDependencyPolicy {
+      +EnsureDefaults(deps)
+      +BuildDefaultDependencies()
+    }
+
+    AppController --> AppControllerDependencies
+    AppControllerDependencyPolicy ..> AppControllerDependencies
+    AppControllerDependencyPolicy ..> IWorkflowCommand : inject defaults
+    AppControllerDependencyPolicy ..> IClassroomGateway : inject defaults
+    AppControllerDependencyPolicy ..> IEmailGateway : inject defaults
+
+    %% ===== Data Relations =====
+    AppState --> Submission
+    AppState --> Student
+    AppState --> Assignment
+    Submission --> AnalysisResult

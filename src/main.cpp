@@ -1,5 +1,11 @@
 #include "app/AppController.h"
 #include "config/AppSettings.h"
+#include "config/SettingsPathResolver.h"
+#include "core/AnalysisStrategies.h"
+#include "core/WorkflowCommands.h"
+#include "integration/ClassroomStudentExporter.h"
+#include "integration/Services.h"
+#include "integration/TokenProvider.h"
 #include "ui/MainWindow.h"
 
 #include "imgui.h"
@@ -15,48 +21,45 @@
 
 namespace {
 
-std::string ResolveSettingsPath() {
+std::string ResolvePathFromSettings(const std::string& settingsPath, const std::string& configuredPath) {
     namespace fs = std::filesystem;
 
-    std::error_code ec;
-    fs::path currentDir = fs::current_path(ec);
-    if (!ec) {
-        fs::path searchDir = currentDir;
-        for (int depth = 0; depth < 8; ++depth) {
-            const fs::path settingsCandidate = searchDir / "settings" / "app_settings.cfg";
-            const fs::path cmakeCandidate = searchDir / "CMakeLists.txt";
-
-            std::error_code fileEc;
-            const bool hasSettings = fs::exists(settingsCandidate, fileEc) && !fileEc;
-            fileEc.clear();
-            const bool hasCmake = fs::exists(cmakeCandidate, fileEc) && !fileEc;
-            if (hasSettings && hasCmake) {
-                return settingsCandidate.lexically_normal().string();
+    auto collapseDuplicateSettings = [](const fs::path& input) {
+        fs::path output;
+        std::string previousPart;
+        for (const auto& part : input) {
+            const std::string currentPart = part.string();
+            if (previousPart == "settings" && currentPart == "settings") {
+                continue;
             }
-
-            if (!searchDir.has_parent_path()) {
-                break;
-            }
-            const fs::path parent = searchDir.parent_path();
-            if (parent == searchDir) {
-                break;
-            }
-            searchDir = parent;
+            output /= part;
+            previousPart = currentPart;
         }
+        return output;
+    };
+
+    fs::path path = collapseDuplicateSettings(fs::path(configuredPath));
+    if (path.is_absolute()) {
+        return path.lexically_normal().string();
     }
 
-    return (fs::path("settings") / "app_settings.cfg").string();
+    const fs::path settingsDir = fs::path(settingsPath).parent_path();
+    const fs::path projectRoot = settingsDir.filename() == "settings" ? settingsDir.parent_path() : settingsDir;
+    return collapseDuplicateSettings(projectRoot / path).lexically_normal().string();
 }
 
 } // namespace
 
 int main() {
-    const std::string settingsPath = ResolveSettingsPath();
+    const std::string settingsPath = config::ResolveSettingsPath();
     config::AppSettings settings;
     config::LoadAppSettings(settingsPath, settings);
 
+    settings.classroomTokenPath = ResolvePathFromSettings(settingsPath, settings.classroomTokenPath);
+    settings.githubTokenPath = ResolvePathFromSettings(settingsPath, settings.githubTokenPath);
+
     if (!glfwInit()) {
-        std::fprintf(stderr, "Failed to initialize GLFW\n");
+        std::fprintf(stderr, "Не вдалося ініціалізувати GLFW\n");
         return 1;
     }
 
@@ -64,9 +67,9 @@ int main() {
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
 
-    GLFWwindow* window = glfwCreateWindow(settings.windowWidth, settings.windowHeight, "AIChecker", nullptr, nullptr);
+    GLFWwindow* window = glfwCreateWindow(settings.windowWidth, settings.windowHeight, "Перевірка робіт", nullptr, nullptr);
     if (window == nullptr) {
-        std::fprintf(stderr, "Failed to create window\n");
+        std::fprintf(stderr, "Не вдалося створити вікно\n");
         glfwTerminate();
         return 1;
     }
@@ -84,7 +87,24 @@ int main() {
     ImGui_ImplGlfw_InitForOpenGL(window, true);
     ImGui_ImplOpenGL3_Init(glslVersion);
 
-    app::AppController controller;
+    app::AppControllerDependencies dependencies;
+    dependencies.analyzeCommand = std::make_unique<core::AnalyzeSubmissionsCommand>(
+        core::StrategyFactory::BuildDefault(settings.ollamaBaseUrl, settings.ollamaModel, settings.plagiarismServiceUrl));
+    dependencies.aiCheckCommand = std::make_unique<core::AnalyzeAiOnlyCommand>(
+        std::make_unique<core::OllamaAIStrategy>(
+            settings.ollamaBaseUrl,
+            settings.ollamaModel,
+            std::make_unique<core::StylometryAIStrategy>()),
+        std::make_unique<core::PromptLeakHeuristicStrategy>());
+    dependencies.plagiarismCheckCommand = std::make_unique<core::AnalyzePlagiarismOnlyCommand>(
+        std::make_unique<core::PlagiarismServiceStrategy>(
+            settings.plagiarismServiceUrl,
+            std::make_unique<core::NgramSimilarityStrategy>()));
+    dependencies.classroomGateway = std::make_unique<integration::ClassroomGatewayStub>(
+        std::make_unique<integration::GoogleClassroomStudentExporter>(
+            std::make_unique<integration::FileTokenProvider>(settings.classroomTokenPath)));
+
+    app::AppController controller(std::move(dependencies));
     controller.SetUseClassroomApiImport(settings.classroomUseApiImport);
     controller.State().assignment.classroomCourseId = settings.classroomCourseId;
     controller.State().assignment.classroomCourseWorkId = settings.classroomCourseWorkId;
@@ -122,6 +142,4 @@ int main() {
 
     glfwDestroyWindow(window);
     glfwTerminate();
-
-    return 0;
 }

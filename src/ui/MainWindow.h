@@ -3,6 +3,8 @@
 #include "app/AppController.h"
 #include "config/AppSettings.h"
 
+#include <cstddef>
+
 struct GLFWwindow;
 
 namespace ui {
@@ -51,12 +53,13 @@ private:
     char githubTokenPathBuffer_[260] = {};
     char classroomTokenPathBuffer_[260] = {};
     char exportDirBuffer_[260] = {};
-    char exportFileBuffer_[260] = "exports/results.csv";
+    char exportFileBuffer_[260] = "result/rezultaty.csv";
 
-    std::string classroomStatus_ = "Unknown";
-    std::string ollamaStatus_ = "Unknown";
-    std::string plagiarismStatus_ = "Unknown";
-    std::string githubStatus_ = "Unknown";
+    std::string classroomStatus_ = "Невідомо";
+    std::string ollamaStatus_ = "Невідомо";
+    std::string plagiarismStatus_ = "Невідомо";
+    std::string githubStatus_ = "Невідомо";
+    std::size_t previousLogCount_ = 0;
 };
 
 } // namespace ui

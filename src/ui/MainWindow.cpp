@@ -1,11 +1,12 @@
 #include "ui/MainWindow.h"
 
+#include "core/SubmissionStatusLabeler.h"
+#include "ui/IntegrationStatusProbe.h"
 #include "imgui.h"
 
 #include <GLFW/glfw3.h>
 
 #include <cstring>
-#include <filesystem>
 #include <string>
 #include <utility>
 
@@ -22,13 +23,8 @@ MainWindow::MainWindow(app::AppController& controller, GLFWwindow* window, confi
 }
 
 const char* MainWindow::SubmissionStatusLabel(core::SubmissionStatus status) {
-    switch (status) {
-        case core::SubmissionStatus::NotLoaded: return "NotLoaded";
-        case core::SubmissionStatus::Cloned: return "Fetched";
-        case core::SubmissionStatus::Analyzed: return "Checked";
-        case core::SubmissionStatus::Synced: return "Synced";
-    }
-    return "Unknown";
+    static const core::DefaultSubmissionStatusLabeler labeler;
+    return labeler.Label(status);
 }
 
 void MainWindow::EnsureUiBuffersInitialized() {
@@ -95,15 +91,16 @@ void MainWindow::ApplyTheme() {
 }
 
 void MainWindow::CheckIntegrationStatus() {
-    const bool hasClassroomToken = std::filesystem::exists(classroomTokenPathBuffer_);
-    const bool hasGithubToken = std::filesystem::exists(githubTokenPathBuffer_);
-    const bool ollamaConfigured = std::strlen(ollamaUrlBuffer_) > 0 && std::strlen(ollamaModelBuffer_) > 0;
-    const bool plagiarismConfigured = std::strlen(plagiarismServiceBuffer_) > 0;
-
-    classroomStatus_ = hasClassroomToken ? "Ready" : "Missing token";
-    githubStatus_ = hasGithubToken ? "Ready" : "Missing token";
-    ollamaStatus_ = ollamaConfigured ? "Configured" : "Not configured";
-    plagiarismStatus_ = plagiarismConfigured ? "Configured" : "Not configured";
+    const IntegrationStatus status = ProbeIntegrationStatus(
+        classroomTokenPathBuffer_,
+        githubTokenPathBuffer_,
+        ollamaUrlBuffer_,
+        ollamaModelBuffer_,
+        plagiarismServiceBuffer_);
+    classroomStatus_ = status.classroom;
+    githubStatus_ = status.github;
+    ollamaStatus_ = status.ollama;
+    plagiarismStatus_ = status.plagiarism;
 }
 
 void MainWindow::Render() {
@@ -116,33 +113,33 @@ void MainWindow::Render() {
                              ImGuiWindowFlags_NoMove |
                              ImGuiWindowFlags_NoCollapse;
 
-    ImGui::Begin("AI Plagiarism Checker", nullptr, flags);
+    ImGui::Begin("Перевірка робіт", nullptr, flags);
 
     RenderTopBar();
     ImGui::Separator();
 
     if (ImGui::BeginTabBar("main_tabs")) {
-        if (ImGui::BeginTabItem("Dashboard")) {
+        if (ImGui::BeginTabItem("Огляд")) {
             RenderDashboardTab();
             ImGui::EndTabItem();
         }
-        if (ImGui::BeginTabItem("Classroom")) {
+        if (ImGui::BeginTabItem("Клас")) {
             RenderClassroomTab();
             ImGui::EndTabItem();
         }
-        if (ImGui::BeginTabItem("Checks")) {
+        if (ImGui::BeginTabItem("Перевірки")) {
             RenderChecksTab();
             ImGui::EndTabItem();
         }
-        if (ImGui::BeginTabItem("Integrations")) {
+        if (ImGui::BeginTabItem("Інтеграції")) {
             RenderIntegrationsTab();
             ImGui::EndTabItem();
         }
-        if (ImGui::BeginTabItem("Export")) {
+        if (ImGui::BeginTabItem("Експорт")) {
             RenderExportTab();
             ImGui::EndTabItem();
         }
-        if (ImGui::BeginTabItem("Logs")) {
+        if (ImGui::BeginTabItem("Логи")) {
             RenderLogs();
             ImGui::EndTabItem();
         }
@@ -155,20 +152,20 @@ void MainWindow::Render() {
 }
 
 void MainWindow::RenderTopBar() {
-    if (ImGui::Button("Run Full Pipeline")) {
+    if (ImGui::Button("Запустити повний цикл")) {
         controller_.RunFullPipeline();
     }
     ImGui::SameLine();
-    if (ImGui::Button("Status Check")) {
+    if (ImGui::Button("Перевірити статус")) {
         CheckIntegrationStatus();
-        controller_.State().logLines.push_back("[Status] Integration status refreshed.");
+        controller_.State().logLines.push_back("[Статус] Стан інтеграцій оновлено.");
     }
     ImGui::SameLine();
-    if (ImGui::Button("Clear Logs")) {
+    if (ImGui::Button("Очистити логи")) {
         controller_.ClearLogs();
     }
     ImGui::SameLine();
-    if (ImGui::Button("Settings")) {
+    if (ImGui::Button("Налаштування")) {
         showSettings_ = true;
     }
 }
@@ -179,46 +176,46 @@ void MainWindow::RenderSettingsWindow() {
     }
 
     ImGui::SetNextWindowSize(ImVec2(520, 420), ImGuiCond_FirstUseEver);
-    if (!ImGui::Begin("Settings", &showSettings_)) {
+    if (!ImGui::Begin("Налаштування", &showSettings_)) {
         ImGui::End();
         return;
     }
 
-    ImGui::Text("Theme");
+    ImGui::Text("Тема");
     bool themeChanged = false;
-    if (ImGui::RadioButton("Black theme", darkTheme_)) {
+    if (ImGui::RadioButton("Темна", darkTheme_)) {
         darkTheme_ = true;
         themeChanged = true;
     }
     ImGui::SameLine();
-    if (ImGui::RadioButton("White theme", !darkTheme_)) {
+    if (ImGui::RadioButton("Світла", !darkTheme_)) {
         darkTheme_ = false;
         themeChanged = true;
     }
 
     ImGui::Spacing();
-    ImGui::Text("UI Size");
+    ImGui::Text("Розмір інтерфейсу");
     float newScale = uiScale_;
-    if (ImGui::SliderFloat("UI scale", &newScale, 0.8f, 1.8f, "%.2f")) {
+    if (ImGui::SliderFloat("Масштаб UI", &newScale, 0.8f, 1.8f, "%.2f")) {
         uiScale_ = newScale;
         themeChanged = true;
     }
 
-    if (ImGui::Button("Smaller App Window")) {
+    if (ImGui::Button("Менше вікно")) {
         if (window_ != nullptr) {
             glfwSetWindowSize(window_, 1200, 700);
             SaveSettingsIfChanged();
         }
     }
     ImGui::SameLine();
-    if (ImGui::Button("Bigger App Window")) {
+    if (ImGui::Button("Більше вікно")) {
         if (window_ != nullptr) {
             glfwSetWindowSize(window_, 1920, 1080);
             SaveSettingsIfChanged();
         }
     }
     ImGui::SameLine();
-    if (ImGui::Button("Default Size")) {
+    if (ImGui::Button("Розмір за замовчуванням")) {
         if (window_ != nullptr) {
             glfwSetWindowSize(window_, 1600, 920);
             SaveSettingsIfChanged();
@@ -226,18 +223,18 @@ void MainWindow::RenderSettingsWindow() {
     }
 
     ImGui::Separator();
-    ImGui::Text("Grade Scale");
-    ImGui::Text("Fixed scale for this project: minimum 2, maximum 5");
+    ImGui::Text("Шкала оцінювання");
+    ImGui::Text("Фіксована шкала для цього проєкту: мінімум 2, максимум 5");
 
     ImGui::Separator();
-    ImGui::Text("Other settings");
+    ImGui::Text("Інші налаштування");
     bool useApiImport = controller_.UseClassroomApiImport();
-    if (ImGui::Checkbox("Load students via Classroom API", &useApiImport)) {
+    if (ImGui::Checkbox("Завантажувати студентів через Classroom API", &useApiImport)) {
         controller_.SetUseClassroomApiImport(useApiImport);
         SaveSettingsIfChanged();
     }
-    ImGui::TextWrapped("For daily work, use tabs: Classroom -> Checks -> Export.");
-    ImGui::TextWrapped("Settings file: %s", settingsPath_.c_str());
+    ImGui::TextWrapped("Рекомендований порядок: Клас -> Перевірки -> Експорт.");
+    ImGui::TextWrapped("Файл налаштувань: %s", settingsPath_.c_str());
 
     if (themeChanged) {
         ApplyTheme();
@@ -249,12 +246,12 @@ void MainWindow::RenderSettingsWindow() {
 
 void MainWindow::RenderDashboardTab() {
     const auto& state = controller_.State();
-    ImGui::Text("Teacher Workflow Overview");
+    ImGui::Text("Огляд робочого процесу викладача");
     ImGui::Separator();
 
-    ImGui::Text("Students: %d", static_cast<int>(state.students.size()));
+    ImGui::Text("Студенти: %d", static_cast<int>(state.students.size()));
     ImGui::SameLine();
-    ImGui::Text("Submissions: %d", static_cast<int>(state.submissions.size()));
+    ImGui::Text("Роботи: %d", static_cast<int>(state.submissions.size()));
     ImGui::SameLine();
 
     int analyzedCount = 0;
@@ -267,36 +264,36 @@ void MainWindow::RenderDashboardTab() {
             ++syncedCount;
         }
     }
-    ImGui::Text("Analyzed: %d", analyzedCount);
+    ImGui::Text("Перевірено: %d", analyzedCount);
     ImGui::SameLine();
-    ImGui::Text("Synced: %d", syncedCount);
+    ImGui::Text("Синхронізовано: %d", syncedCount);
 
     ImGui::Spacing();
-    if (ImGui::Button("Load Students")) {
+    if (ImGui::Button("Завантажити студентів")) {
         controller_.LoadStudents();
     }
     ImGui::SameLine();
-    if (ImGui::Button("Build Submissions")) {
+    if (ImGui::Button("Побудувати роботи")) {
         controller_.BuildSubmissions();
     }
     ImGui::SameLine();
-    if (ImGui::Button("Analyze All")) {
+    if (ImGui::Button("Перевірити все")) {
         controller_.Analyze();
     }
     ImGui::SameLine();
-    if (ImGui::Button("Sync Grades")) {
+    if (ImGui::Button("Синхронізувати оцінки")) {
         controller_.SyncGrades();
     }
     ImGui::SameLine();
-    if (ImGui::Button("Send Email")) {
+    if (ImGui::Button("Надіслати email")) {
         controller_.SendFeedbackEmails();
     }
 
     ImGui::Spacing();
-    ImGui::Text("Integration status");
+    ImGui::Text("Стан інтеграцій");
     ImGui::BulletText("Classroom API: %s", classroomStatus_.c_str());
     ImGui::BulletText("Ollama (Llama 3.2): %s", ollamaStatus_.c_str());
-    ImGui::BulletText("Plagiarism service: %s", plagiarismStatus_.c_str());
+    ImGui::BulletText("Сервіс плагіату: %s", plagiarismStatus_.c_str());
     ImGui::BulletText("GitHub API: %s", githubStatus_.c_str());
 }
 
@@ -307,13 +304,13 @@ void MainWindow::RenderClassroomTab() {
     const std::string previousCourseWorkId = assignment.classroomCourseWorkId;
     const std::string previousStudentGroup = assignment.classroomStudentGroup;
 
-    ImGui::Text("Minimal teacher input");
-    ImGui::InputText("Google Course ID", courseIdBuffer_, sizeof(courseIdBuffer_));
-    ImGui::InputText("Google CourseWork ID", courseWorkIdBuffer_, sizeof(courseWorkIdBuffer_));
-    ImGui::InputText("Student filter (name/group/email/github)", studentFilterBuffer_, sizeof(studentFilterBuffer_));
+    ImGui::Text("Мінімальне введення даних");
+    ImGui::InputText("ID курсу Google", courseIdBuffer_, sizeof(courseIdBuffer_));
+    ImGui::InputText("ID завдання Google CourseWork", courseWorkIdBuffer_, sizeof(courseWorkIdBuffer_));
+    ImGui::InputText("Фільтр студентів (ПІБ/група/email/github)", studentFilterBuffer_, sizeof(studentFilterBuffer_));
 
     bool useApiImport = controller_.UseClassroomApiImport();
-    const bool apiImportChanged = ImGui::Checkbox("Use Classroom API import", &useApiImport);
+    const bool apiImportChanged = ImGui::Checkbox("Використовувати імпорт через Classroom API", &useApiImport);
     if (apiImportChanged) {
         controller_.SetUseClassroomApiImport(useApiImport);
         SaveSettingsIfChanged();
@@ -321,7 +318,7 @@ void MainWindow::RenderClassroomTab() {
 
     assignment.minGrade = 2.0;
     assignment.maxPoints = 5.0;
-    ImGui::Text("Grade range: %.1f .. %.1f", assignment.minGrade, assignment.maxPoints);
+    ImGui::Text("Діапазон оцінок: %.1f .. %.1f", assignment.minGrade, assignment.maxPoints);
 
     assignment.classroomCourseId = courseIdBuffer_;
     assignment.classroomCourseWorkId = courseWorkIdBuffer_;
@@ -334,12 +331,12 @@ void MainWindow::RenderClassroomTab() {
     }
 
     ImGui::Separator();
-    ImGui::Text("Imported students");
+    ImGui::Text("Імпортовані студенти");
     const auto& students = controller_.State().students;
-    ImGui::Text("Students: %d", static_cast<int>(students.size()));
+    ImGui::Text("Студенти: %d", static_cast<int>(students.size()));
 
     if (ImGui::BeginTable("students_table", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
-        ImGui::TableSetupColumn("Full Name");
+        ImGui::TableSetupColumn("ПІБ");
         ImGui::TableSetupColumn("Email");
         ImGui::TableSetupColumn("GitHub");
         ImGui::TableHeadersRow();
@@ -349,7 +346,10 @@ void MainWindow::RenderClassroomTab() {
             ImGui::TableSetColumnIndex(0);
             ImGui::TextUnformatted(student.fullName.c_str());
             ImGui::TableSetColumnIndex(1);
-            ImGui::TextUnformatted(student.email.c_str());
+            const std::string visibleEmail = student.email.empty()
+                ? "Немає (потрібен scope classroom.profile.emails)"
+                : student.email;
+            ImGui::TextUnformatted(visibleEmail.c_str());
             ImGui::TableSetColumnIndex(2);
             ImGui::TextUnformatted(student.githubUsername.c_str());
         }
@@ -359,31 +359,31 @@ void MainWindow::RenderClassroomTab() {
 }
 
 void MainWindow::RenderChecksTab() {
-    ImGui::Text("Checks");
-    if (ImGui::Button("AI Check")) {
+    ImGui::Text("Перевірки");
+    if (ImGui::Button("AI перевірка")) {
         controller_.RunAICheckOnly();
     }
     ImGui::SameLine();
-    if (ImGui::Button("Plagiarism Check")) {
+    if (ImGui::Button("Перевірка плагіату")) {
         controller_.RunPlagiarismCheckOnly();
     }
     ImGui::SameLine();
-    if (ImGui::Button("Full Analyze (grade 2..5)")) {
+    if (ImGui::Button("Повний аналіз (оцінки 2..5)")) {
         controller_.Analyze();
     }
 
     ImGui::Spacing();
     const auto& submissions = controller_.State().submissions;
-    ImGui::Text("Submissions: %d", static_cast<int>(submissions.size()));
+    ImGui::Text("Роботи: %d", static_cast<int>(submissions.size()));
 
     if (ImGui::BeginTable("submissions_table", 7, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY, ImVec2(0.0f, 230.0f))) {
-        ImGui::TableSetupColumn("Student");
-        ImGui::TableSetupColumn("Repository");
-        ImGui::TableSetupColumn("Plagiarism %");
+        ImGui::TableSetupColumn("Студент");
+        ImGui::TableSetupColumn("Репозиторій");
+        ImGui::TableSetupColumn("Плагіат %");
         ImGui::TableSetupColumn("AI %");
-        ImGui::TableSetupColumn("Grade");
-        ImGui::TableSetupColumn("Status");
-        ImGui::TableSetupColumn("Summary");
+        ImGui::TableSetupColumn("Оцінка");
+        ImGui::TableSetupColumn("Статус");
+        ImGui::TableSetupColumn("Підсумок");
         ImGui::TableHeadersRow();
 
         for (const auto& submission : submissions) {
@@ -418,26 +418,26 @@ void MainWindow::RenderChecksTab() {
 void MainWindow::RenderIntegrationsTab() {
     bool changed = false;
 
-    ImGui::Text("Ollama (Local Llama 3.2)");
-    changed |= ImGui::InputText("Ollama URL", ollamaUrlBuffer_, sizeof(ollamaUrlBuffer_));
-    changed |= ImGui::InputText("Ollama model", ollamaModelBuffer_, sizeof(ollamaModelBuffer_));
+    ImGui::Text("Ollama (локальна Llama 3.2)");
+    changed |= ImGui::InputText("URL Ollama", ollamaUrlBuffer_, sizeof(ollamaUrlBuffer_));
+    changed |= ImGui::InputText("Модель Ollama", ollamaModelBuffer_, sizeof(ollamaModelBuffer_));
 
     ImGui::Separator();
-    ImGui::Text("Plagiarism service");
-    changed |= ImGui::InputText("Service URL", plagiarismServiceBuffer_, sizeof(plagiarismServiceBuffer_));
+    ImGui::Text("Сервіс перевірки плагіату");
+    changed |= ImGui::InputText("URL сервісу", plagiarismServiceBuffer_, sizeof(plagiarismServiceBuffer_));
 
     ImGui::Separator();
-    ImGui::Text("API tokens / paths");
-    changed |= ImGui::InputText("Classroom token path", classroomTokenPathBuffer_, sizeof(classroomTokenPathBuffer_));
-    changed |= ImGui::InputText("GitHub token path", githubTokenPathBuffer_, sizeof(githubTokenPathBuffer_));
+    ImGui::Text("API токени / шляхи");
+    changed |= ImGui::InputText("Шлях токена Classroom", classroomTokenPathBuffer_, sizeof(classroomTokenPathBuffer_));
+    changed |= ImGui::InputText("Шлях токена GitHub", githubTokenPathBuffer_, sizeof(githubTokenPathBuffer_));
 
-    if (ImGui::Button("Refresh status")) {
+    if (ImGui::Button("Оновити статус")) {
         CheckIntegrationStatus();
     }
 
     ImGui::Text("Classroom API: %s", classroomStatus_.c_str());
     ImGui::Text("Ollama: %s", ollamaStatus_.c_str());
-    ImGui::Text("Plagiarism: %s", plagiarismStatus_.c_str());
+    ImGui::Text("Плагіат: %s", plagiarismStatus_.c_str());
     ImGui::Text("GitHub API: %s", githubStatus_.c_str());
 
     if (changed) {
@@ -447,15 +447,20 @@ void MainWindow::RenderIntegrationsTab() {
 }
 
 void MainWindow::RenderExportTab() {
-    ImGui::Text("Export results");
+    ImGui::Text("Експорт результатів");
     bool changed = false;
-    changed |= ImGui::InputText("Export directory", exportDirBuffer_, sizeof(exportDirBuffer_));
-    changed |= ImGui::InputText("Output CSV file", exportFileBuffer_, sizeof(exportFileBuffer_));
+    changed |= ImGui::InputText("Каталог експорту", exportDirBuffer_, sizeof(exportDirBuffer_));
+    changed |= ImGui::InputText("CSV файл", exportFileBuffer_, sizeof(exportFileBuffer_));
 
-    if (ImGui::Button("Export Excel-compatible CSV")) {
+    if (ImGui::Button("Експорт CSV (Excel)")) {
         controller_.ExportResultsCsv(exportFileBuffer_);
     }
-    ImGui::TextWrapped("Tip: open CSV in Excel and save as .xlsx if needed.");
+    ImGui::SameLine();
+    if (ImGui::Button("Експорт TXT по студентах")) {
+        controller_.ExportStudentReports("result");
+    }
+    ImGui::TextWrapped("Формат TXT: result/Ім'я-Студента/lab23_result.txt");
+    ImGui::TextWrapped("Порада: CSV можна відкрити в Excel і за потреби зберегти як .xlsx.");
 
     if (changed) {
         SaveSettingsIfChanged();
@@ -464,16 +469,20 @@ void MainWindow::RenderExportTab() {
 
 void MainWindow::RenderLogs() {
     const auto& logs = controller_.State().logLines;
-    ImGui::Text("Event Log");
+    ImGui::Text("Журнал подій");
+
+    const bool hasNewLogs = logs.size() > previousLogCount_;
 
     if (ImGui::BeginChild("log_panel", ImVec2(0, 170), true, ImGuiWindowFlags_HorizontalScrollbar)) {
         for (const auto& line : logs) {
             ImGui::TextWrapped("%s", line.c_str());
         }
-        if (!logs.empty()) {
+        if (hasNewLogs && !logs.empty()) {
             ImGui::SetScrollHereY(1.0f);
         }
     }
     ImGui::EndChild();
+
+    previousLogCount_ = logs.size();
 }
 }

@@ -32,6 +32,9 @@ struct AnalysisResult {
     double aiLikelihoodScore = 0.0;
     int finalGrade = 2;
     std::string summary;
+    std::string aiThinking;
+    std::string aiIndicators;
+    std::string aiConclusion;
     std::string feedbackEmailBody;
 };
 
