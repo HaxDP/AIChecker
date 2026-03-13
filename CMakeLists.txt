@@ -7,27 +7,6 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 include(FetchContent)
 
-set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
-set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-
-FetchContent_Declare(
-  glfw
-  GIT_REPOSITORY https://github.com/glfw/glfw.git
-  GIT_TAG 3.4
-)
-FetchContent_MakeAvailable(glfw)
-
-FetchContent_Declare(
-  imgui
-  GIT_REPOSITORY https://github.com/ocornut/imgui.git
-  GIT_TAG v1.91.9b
-)
-FetchContent_GetProperties(imgui)
-if(NOT imgui_POPULATED)
-  FetchContent_Populate(imgui)
-endif()
-
 FetchContent_Declare(
   nlohmann_json
   GIT_REPOSITORY https://github.com/nlohmann/json.git
@@ -35,36 +14,32 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(nlohmann_json)
 
-add_library(imgui_lib STATIC
-  ${imgui_SOURCE_DIR}/imgui.cpp
-  ${imgui_SOURCE_DIR}/imgui_draw.cpp
-  ${imgui_SOURCE_DIR}/imgui_tables.cpp
-  ${imgui_SOURCE_DIR}/imgui_widgets.cpp
-  ${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp
-  ${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp
+FetchContent_Declare(
+  cpp_httplib
+  GIT_REPOSITORY https://github.com/yhirose/cpp-httplib.git
+  GIT_TAG v0.18.6
 )
-
-target_include_directories(imgui_lib PUBLIC
-  ${imgui_SOURCE_DIR}
-  ${imgui_SOURCE_DIR}/backends
-)
-
-find_package(OpenGL REQUIRED)
-
-target_link_libraries(imgui_lib PUBLIC glfw OpenGL::GL)
+FetchContent_GetProperties(cpp_httplib)
+if(NOT cpp_httplib_POPULATED)
+  FetchContent_Populate(cpp_httplib)
+endif()
 
 add_executable(AIChecker
   src/main.cpp
-  src/app/AppController.cpp
-  src/config/AppSettings.cpp
-  src/ui/MainWindow.cpp
+  src/server/Api.cpp
+  src/server/Controllers.cpp
+  src/server/Utils.cpp
+  src/server/Stores.cpp
+  src/server/Services.cpp
 )
 
 target_include_directories(AIChecker PRIVATE src)
-target_link_libraries(AIChecker PRIVATE imgui_lib nlohmann_json::nlohmann_json)
+target_include_directories(AIChecker PRIVATE ${cpp_httplib_SOURCE_DIR})
+target_link_libraries(AIChecker PRIVATE nlohmann_json::nlohmann_json)
 
 if(WIN32)
   target_link_libraries(AIChecker PRIVATE winhttp)
+  target_link_libraries(AIChecker PRIVATE ws2_32)
 endif()
 
 if(MSVC)
