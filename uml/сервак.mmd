@@ -1,0 +1,79 @@
+classDiagram
+    direction TB
+
+    class WebApiApp {
+      +Run(port)
+    }
+
+    class ApiDependencies {
+      +sessions
+      +cache
+      +data
+      +repoService
+      +aiService
+      +plagiarismService
+      +finalService
+    }
+
+    class LocalSessionStore {
+      +Create()
+      +Get()
+      +Remove()
+    }
+
+    class LocalCacheStore {
+      +Set()
+    }
+
+    class DataStore {
+      +Classes()
+      +TasksByClass()
+      +SubmissionsByTask()
+      +SubmissionById()
+      +TaskStats()
+    }
+
+    class RepositoryService {
+      +Pull(submissions)
+    }
+
+    class AiReviewService {
+      +Analyze(submission,model,temperature)
+    }
+
+    class PlagiarismService {
+      +Analyze(submission)
+      -Tokenize(text)
+      -Jaccard(a,b)
+    }
+
+    class FinalizationService {
+      +Approve(submission,grade,feedback)
+      +Send(submission)
+    }
+
+    class SubmissionItem {
+      +id
+      +studentName
+      +repositoryUrl
+      +aiScore
+      +plagiarismScore
+      +grade
+      +approved
+      +sent
+    }
+
+    WebApiApp --> ApiDependencies
+
+    ApiDependencies --> LocalSessionStore
+    ApiDependencies --> LocalCacheStore
+    ApiDependencies --> DataStore
+    ApiDependencies --> RepositoryService
+    ApiDependencies --> AiReviewService
+    ApiDependencies --> PlagiarismService
+    ApiDependencies --> FinalizationService
+
+    DataStore o--> SubmissionItem
+    AiReviewService --> SubmissionItem
+    PlagiarismService --> SubmissionItem
+    FinalizationService --> SubmissionItem

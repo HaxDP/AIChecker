@@ -16,8 +16,8 @@ Return only valid JSON with exact schema:
 No markdown. No extra text.
 """
 
-PARAMETER temperature 0.1
-PARAMETER top_p 0.9
+PARAMETER temperature 0
+PARAMETER top_p 0.6
 PARAMETER seed 42
 PARAMETER num_predict 700
 PARAMETER repeat_penalty 1.1

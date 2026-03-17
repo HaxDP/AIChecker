@@ -1,0 +1,45 @@
+flowchart TB
+    UI[Web UI\nlogin/dashboard]
+    API[Web API\nWebApiApp]
+
+    AUTH[Auth Routes]
+    CLASS[Classroom Routes]
+    REVIEW[Review Routes]
+
+    REPO[RepositoryService]
+    AI[AiReviewService]
+    PLAG[PlagiarismService]
+    FINAL[FinalizationService]
+
+    STORE[DataStore]
+    SESS[LocalSessionStore]
+    CACHE[LocalCacheStore]
+
+    GC[Google Classroom API]
+    GM[Gmail API]
+    OL[Ollama API]
+    GIT[Git Repos]
+    FS[(Local FS\ncache/outbox/sessions)]
+
+    UI --> API
+    API --> AUTH
+    API --> CLASS
+    API --> REVIEW
+
+    AUTH --> SESS
+    CLASS --> STORE
+    CLASS --> GC
+
+    REVIEW --> REPO
+    REVIEW --> AI
+    REVIEW --> PLAG
+    REVIEW --> FINAL
+    REVIEW --> STORE
+
+    REPO --> GIT
+    AI --> OL
+    FINAL --> GM
+
+    SESS --> FS
+    CACHE --> FS
+    STORE --> FS

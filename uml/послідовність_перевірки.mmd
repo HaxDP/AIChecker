@@ -1,0 +1,42 @@
+sequenceDiagram
+    actor Teacher
+    participant UI as Dashboard
+    participant API as Web API
+    participant DS as DataStore
+    participant Repo as RepositoryService
+    participant Plag as PlagiarismService
+    participant AI as AiReviewService
+    participant Final as FinalizationService
+
+    Teacher->>UI: Login and choose task
+    UI->>API: GET classes/tasks/submissions
+    API->>DS: Load state
+    API-->>UI: List of submissions
+
+    Teacher->>UI: Pull repositories
+    UI->>API: POST /pull-repos
+    API->>Repo: Pull(...)
+    Repo-->>API: sync results
+    API-->>UI: rows ok/error
+
+    Teacher->>UI: Run plagiarism
+    UI->>API: POST /review/plagiarism
+    API->>DS: SubmissionById
+    API->>Plag: Analyze
+    Plag-->>API: plagiarismScore
+    API-->>UI: score
+
+    Teacher->>UI: Run AI check
+    UI->>API: POST /review/ai
+    API->>DS: SubmissionById
+    API->>AI: Analyze
+    AI-->>API: aiScore + decision
+    API-->>UI: score + report
+
+    Teacher->>UI: Finalize and send
+    UI->>API: POST /review/finalize
+    API->>Final: Approve
+    UI->>API: POST /review/send-email
+    API->>Final: Send
+    Final-->>API: sent/fallback
+    API-->>UI: done

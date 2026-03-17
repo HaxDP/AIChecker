@@ -1,0 +1,74 @@
+classDiagram
+    direction TB
+
+    class AppController {
+      +LoadStudents()
+      +BuildSubmissions()
+      +Analyze()
+      +SyncGrades()
+      +SendFeedbackEmails()
+    }
+
+    class IObserver {
+      <<interface>>
+      +OnEvent(text)
+    }
+
+    class EventBus {
+      +Subscribe(observer)
+      +Emit(message)
+    }
+
+    class IWorkflowCommand {
+      <<interface>>
+      +Execute(state,bus)
+    }
+
+    class LoadStudentsCommand { <<command>> }
+    class BuildSubmissionsCommand { <<command>> }
+    class AnalyzeSubmissionsCommand { <<command>> }
+    class SyncGradesCommand { <<command>> }
+    class SendEmailFeedbackCommand { <<command>> }
+
+    class IAnalysisStrategy {
+      <<interface>>
+      +Analyze(submission)
+    }
+
+    class NgramSimilarityStrategy { <<strategy>> }
+    class OllamaAIStrategy { <<strategy>> }
+    class PromptLeakHeuristicStrategy { <<strategy>> }
+    class StrategyFactory { <<factory>> }
+
+    class AppState
+    class Submission
+    class AnalysisResult
+    class SubmissionStatus {
+      <<enumeration>>
+      NotLoaded
+      Cloned
+      Analyzed
+      Synced
+    }
+
+    AppController ..|> IObserver
+    AppController --> EventBus
+    EventBus o--> IObserver
+
+    AppController --> IWorkflowCommand
+    IWorkflowCommand <|.. LoadStudentsCommand
+    IWorkflowCommand <|.. BuildSubmissionsCommand
+    IWorkflowCommand <|.. AnalyzeSubmissionsCommand
+    IWorkflowCommand <|.. SyncGradesCommand
+    IWorkflowCommand <|.. SendEmailFeedbackCommand
+
+    AnalyzeSubmissionsCommand --> IAnalysisStrategy
+    IAnalysisStrategy <|.. NgramSimilarityStrategy
+    IAnalysisStrategy <|.. OllamaAIStrategy
+    IAnalysisStrategy <|.. PromptLeakHeuristicStrategy
+    StrategyFactory --> IAnalysisStrategy
+
+    AppController --> AppState
+    AppState o--> Submission
+    Submission o--> AnalysisResult
+    Submission --> SubmissionStatus
