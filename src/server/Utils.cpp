@@ -156,12 +156,15 @@ namespace backend
       out["studentEmail"] = item.studentEmail.empty() ? "Немає (потрібен scope classroom.profile.emails)" : item.studentEmail;
       out["repositoryUrl"] = item.repositoryUrl;
       out["status"] = item.status;
+      out["late"] = item.late;
       out["aiScore"] = item.aiScore;
       out["plagiarismScore"] = item.plagiarismScore;
       out["grade"] = item.grade;
       out["approved"] = item.approved;
       out["sent"] = item.sent;
       out["feedback"] = item.feedback;
+      out["teacherComment"] = item.teacherComment;
+      out["detailedDescription"] = item.detailedDescription;
       out["aiReport"] = item.aiReport;
       return out;
    }

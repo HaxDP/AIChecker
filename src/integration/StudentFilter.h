@@ -22,4 +22,4 @@ inline bool MatchesStudentFilter(const core::Student& student, const std::string
     return groupMatch || exactNameMatch || emailMatch || githubMatch;
 }
 
-} // namespace integration
+}

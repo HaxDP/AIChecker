@@ -181,4 +181,4 @@ private:
     std::unique_ptr<IHttpClient> httpClient_;
 };
 
-} // namespace integration
+}

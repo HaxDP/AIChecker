@@ -145,7 +145,7 @@ const std::vector<std::pair<std::string, Writer>>& BuildWriters() {
     return writers;
 }
 
-} // namespace
+}
 
 namespace config {
 
@@ -203,4 +203,4 @@ bool SaveAppSettings(const std::string& filePath, const AppSettings& settings) {
     return true;
 }
 
-} // namespace config
+}

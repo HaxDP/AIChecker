@@ -150,6 +150,33 @@ std::string VisibleEmail(const std::string& email) {
     return "Немає email (додайте scope classroom.profile.emails)";
 }
 
+std::string EscapeCsvCell(const std::string& value) {
+    std::string escaped;
+    escaped.reserve(value.size() + 8);
+    escaped.push_back('"');
+    for (char ch : value) {
+        if (ch == '"') {
+            escaped += "\"\"";
+        } else {
+            escaped.push_back(ch);
+        }
+    }
+    escaped.push_back('"');
+    return escaped;
+}
+
+std::string FormatDecimalForCsv(double value, int precision = 1) {
+    std::ostringstream stream;
+    stream << std::fixed << std::setprecision(precision) << value;
+    std::string formatted = stream.str();
+    for (char& ch : formatted) {
+        if (ch == '.') {
+            ch = ',';
+        }
+    }
+    return formatted;
+}
+
 std::string ExtractRepositorySlug(const std::string& repositoryUrl) {
     if (repositoryUrl.empty()) {
         return {};
@@ -344,16 +371,22 @@ bool AppController::ExportResultsCsv(const std::string& outputPath) {
         return false;
     }
 
-    file << "ПІБ,Email,GitHub,Плагіат,AI Ризик,Оцінка,Статус,Підсумок\n";
+    // UTF-8 BOM improves correct Cyrillic detection in Excel.
+    file << "\xEF\xBB\xBF";
+    file << "ПІБ;Email;GitHub;Плагіат_%_0_100;AI_ризик_%_0_100;Підсумкова_оцінка_2_5;AI_рішення;AI_аналіз;AI_індикатори;Email_коментар;Статус;Підсумок\n";
     for (const auto& submission : state_.submissions) {
-        file << '"' << submission.student.fullName << "\",";
-        file << '"' << VisibleEmail(submission.student.email) << "\",";
-        file << '"' << submission.student.githubUsername << "\",";
-        file << submission.result.plagiarismScore << ',';
-        file << submission.result.aiLikelihoodScore << ',';
-        file << submission.result.finalGrade << ',';
-        file << '"' << statusLabeler_->Label(submission.status) << "\",";
-        file << '"' << submission.result.summary << "\"\n";
+        file << EscapeCsvCell(submission.student.fullName) << ';';
+        file << EscapeCsvCell(VisibleEmail(submission.student.email)) << ';';
+        file << EscapeCsvCell(submission.student.githubUsername) << ';';
+        file << EscapeCsvCell(FormatDecimalForCsv(submission.result.plagiarismScore, 1)) << ';';
+        file << EscapeCsvCell(FormatDecimalForCsv(submission.result.aiLikelihoodScore, 1)) << ';';
+        file << EscapeCsvCell(std::to_string(submission.result.finalGrade)) << ';';
+        file << EscapeCsvCell(submission.result.aiConclusion) << ';';
+        file << EscapeCsvCell(submission.result.aiThinking) << ';';
+        file << EscapeCsvCell(submission.result.aiIndicators) << ';';
+        file << EscapeCsvCell(submission.result.feedbackEmailBody) << ';';
+        file << EscapeCsvCell(statusLabeler_->Label(submission.status)) << ';';
+        file << EscapeCsvCell(submission.result.summary) << "\n";
     }
 
     state_.logLines.push_back("[Експорт] CSV збережено: " + outputPath + " (сумісно з Excel)");
@@ -435,4 +468,4 @@ void AppController::ClearLogs() {
     state_.logLines.clear();
 }
 
-} // namespace app
+}

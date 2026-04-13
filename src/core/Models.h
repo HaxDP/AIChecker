@@ -53,4 +53,4 @@ struct AppState {
     std::vector<std::string> logLines;
 };
 
-} // namespace core
+}

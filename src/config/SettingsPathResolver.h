@@ -38,4 +38,4 @@ inline std::string ResolveSettingsPath() {
     return (fs::path("settings") / "app_settings.cfg").string();
 }
 
-} // namespace config
+}

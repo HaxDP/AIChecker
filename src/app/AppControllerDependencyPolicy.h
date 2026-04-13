@@ -34,4 +34,4 @@ inline AppControllerDependencies BuildDefaultDependencies() {
     return EnsureDefaults(AppControllerDependencies{});
 }
 
-} // namespace app
+}

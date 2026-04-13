@@ -2,93 +2,115 @@ body
 {
    margin: 0;
    font-family: Segoe UI, Arial, sans-serif;
-   background: #050a1b;
-   color: #e6efff;
+   background: #2b2d30;
+   color: #e4e6ea;
    min-height: 100vh;
 }
 
 .space-bg
 {
-   position: fixed;
-   inset: 0;
-   pointer-events: none;
-   background:
-      radial-gradient(circle at 16% 20%, rgba(71, 130, 255, 0.24) 0%, rgba(71, 130, 255, 0) 20%),
-      radial-gradient(circle at 82% 72%, rgba(109, 84, 255, 0.22) 0%, rgba(109, 84, 255, 0) 24%),
-      radial-gradient(circle at 70% 18%, rgba(120, 226, 255, 0.12) 0%, rgba(120, 226, 255, 0) 16%),
-      radial-gradient(circle at 50% 40%, #0a1533 0%, #040917 55%, #020612 100%);
-   z-index: 0;
+   display: none;
 }
 
-.space-bg::before
+.dashboard-layout
 {
-   content: "";
-   position: absolute;
-   inset: 0;
-   opacity: 0.45;
-   background-image:
-      radial-gradient(2px 2px at 20% 22%, rgba(255, 255, 255, 0.72), rgba(255, 255, 255, 0)),
-      radial-gradient(1.5px 1.5px at 74% 28%, rgba(255, 255, 255, 0.58), rgba(255, 255, 255, 0)),
-      radial-gradient(2px 2px at 66% 72%, rgba(255, 255, 255, 0.68), rgba(255, 255, 255, 0)),
-      radial-gradient(1.5px 1.5px at 40% 78%, rgba(255, 255, 255, 0.45), rgba(255, 255, 255, 0));
+   display: grid;
+   grid-template-columns: 260px 1fr 340px;
+   gap: 12px;
+   min-height: 100vh;
+   padding: 12px;
+   box-sizing: border-box;
 }
 
-#app.app-shell
+.panel
 {
-   position: relative;
-   z-index: 1;
-   max-width: 1100px;
-   margin: 0 auto;
-   padding: 20px;
+   background: #3a3d42;
+   border: 1px solid #555a62;
+   border-radius: 10px;
+   padding: 12px;
+   box-sizing: border-box;
 }
 
-.top
+.left-panel h1
+{
+   margin: 0 0 8px;
+   font-size: 22px;
+}
+
+h2,
+h3
+{
+   margin: 10px 0 8px;
+}
+
+.user-box
+{
+   margin-bottom: 12px;
+}
+
+.list
+{
+   display: grid;
+   gap: 6px;
+}
+
+button
+{
+   background: #595f67;
+   color: #fff;
+   border: 1px solid #4d5259;
+   border-radius: 7px;
+   min-height: 34px;
+   padding: 7px 10px;
+   cursor: pointer;
+   text-align: left;
+   font-weight: 600;
+}
+
+button:hover
+{
+   background: #6a7079;
+}
+
+.filter-btn.active
+{
+   background: #7b828d;
+}
+
+.toolbar
 {
    display: flex;
-   align-items: center;
    justify-content: space-between;
-   margin-bottom: 14px;
+   align-items: flex-start;
+   gap: 10px;
 }
 
-.kicker
+.toolbar h2
 {
-   margin: 0;
-   font-size: 12px;
-   letter-spacing: 0.12em;
-   text-transform: uppercase;
-   color: #95b7ff;
+   margin-top: 0;
 }
 
-h1
+.toolbar-actions
 {
-   margin: 4px 0 0;
-   font-size: 24px;
+   display: flex;
+   flex-wrap: wrap;
+   gap: 6px;
 }
 
-h2
+.toolbar-actions button
 {
-   margin: 0 0 12px;
-   font-size: 18px;
+   text-align: center;
 }
 
-.muted
+.checking-indicator
 {
-   color: #b7caef;
-}
-
-.card
-{
-   background: rgba(12, 25, 59, 0.62);
-   border: 1px solid rgba(99, 145, 255, 0.35);
-   border-radius: 12px;
-   padding: 16px;
-   margin: 12px 0;
-}
-
-.glass
-{
-   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 12px 30px rgba(4, 12, 32, 0.45);
-   backdrop-filter: blur(6px);
+   margin-top: 8px;
+   border: 1px solid #5f6671;
+   background: #31353b;
+   color: #dce2ea;
+   border-radius: 8px;
+   padding: 8px 10px;
+   font-size: 13px;
 }
 
 .hidden
@@ -96,52 +118,197 @@ h2
    display: none;
 }
 
-button
+#submissionsTable
 {
-   background: linear-gradient(180deg, #1f58c8 0%, #16409a 100%);
-   color: #fff;
-   border: 1px solid rgba(144, 191, 255, 0.35);
-   padding: 9px 13px;
-   border-radius: 8px;
+   width: 100%;
+   border-collapse: collapse;
+   margin-top: 10px;
+   background: #32353a;
+}
+
+#submissionsTable th,
+#submissionsTable td
+{
+   border: 1px solid #565b64;
+   padding: 7px;
+   text-align: left;
+}
+
+#submissionsTable th
+{
+   background: #454950;
+}
+
+#submissionsTable tbody tr
+{
    cursor: pointer;
-   min-height: 38px;
-   line-height: 1.1;
-   font-weight: 600;
 }
 
-button:hover
+#submissionsTable tbody tr.active-row
 {
-   background: linear-gradient(180deg, #2a68dd 0%, #1a49ab 100%);
+   background: #505660;
 }
 
-select,
-input
+.checking-cell
 {
-   background: rgba(7, 15, 36, 0.92);
-   color: #e5ecff;
-   border: 1px solid rgba(106, 147, 228, 0.6);
+   position: relative;
+   color: transparent;
+}
+
+.checking-cell::after
+{
+   content: "перевірка...";
+   position: absolute;
+   left: 7px;
+   top: 50%;
+   transform: translateY(-50%);
+   color: #d7dee8;
+   animation: checkingPulse 1s ease-in-out infinite;
+}
+
+@keyframes checkingPulse
+{
+   0%
+   {
+      opacity: 0.35;
+   }
+
+   50%
+   {
+      opacity: 1;
+   }
+
+   100%
+   {
+      opacity: 0.35;
+   }
+}
+
+.status-pill
+{
+   display: inline-block;
+   padding: 2px 8px;
+   border-radius: 999px;
+   font-size: 12px;
+   font-weight: 700;
+}
+
+.status-missing
+{
+   background: #ffc8c8;
+   color: #7c1f1f;
+}
+
+.status-turned_in_late
+{
+   background: #ffe2b3;
+   color: #6b4300;
+}
+
+.status-turned_in
+{
+   background: #d7f0d0;
+   color: #22501b;
+}
+
+.status-checked
+{
+   background: #d2e6ff;
+   color: #143b63;
+}
+
+.status-sended
+{
+   background: #c9f0e8;
+   color: #13473b;
+}
+
+.right-actions
+{
+   display: grid;
+   gap: 6px;
+   margin-bottom: 10px;
+}
+
+.right-actions button
+{
+   text-align: center;
+}
+
+.right-panel
+{
+   max-height: calc(100vh - 24px);
+   overflow-y: auto;
+}
+
+label
+{
+   display: block;
+   margin: 8px 0 4px;
+   font-size: 13px;
+   color: #d3d7de;
+}
+
+input,
+textarea
+{
+   width: 100%;
+   box-sizing: border-box;
+   border: 1px solid #666c75;
    border-radius: 6px;
    padding: 8px;
-   margin-right: 8px;
+   background: #2b2f35;
+   color: #eceff4;
 }
 
-select
+textarea
 {
-   min-width: 320px;
+   resize: vertical;
 }
 
-.form-row
+.checkbox-line
 {
    display: flex;
    gap: 8px;
    align-items: center;
-   flex-wrap: wrap;
+   margin-top: 8px;
 }
 
-#reviewSection .form-row button
+.checkbox-line input
 {
-   min-width: 200px;
-   text-align: center;
+   width: auto;
+}
+
+.selected-card
+{
+   border: 1px solid #5f656f;
+   border-radius: 8px;
+   background: #32363c;
+   padding: 10px;
+   margin-bottom: 10px;
+   min-height: 88px;
+   white-space: pre-wrap;
+}
+
+.report-box,
+#logBox,
+.log-compact
+{
+   background: #2f3339;
+   border: 1px solid #5c626c;
+   border-radius: 8px;
+   padding: 10px;
+   white-space: pre-wrap;
+}
+
+.report-box
+{
+   min-height: 120px;
+}
+
+.log-wrap
+{
+   margin-top: 10px;
 }
 
 .login-shell
@@ -150,108 +317,78 @@ select
    display: flex;
    align-items: center;
    justify-content: center;
+   padding: 16px;
+   box-sizing: border-box;
 }
 
-.login-card
+#app.app-shell
 {
-   width: min(560px, 92vw);
+   width: 100%;
+   max-width: 760px;
+   margin: 0 auto;
+}
+
+.card
+{
+   background: #3a3d42;
+   border: 1px solid #555a62;
+   border-radius: 10px;
+   padding: 16px;
+}
+
+.glass
+{
+   box-shadow: none;
+}
+
+.kicker
+{
+   margin: 0;
+   color: #a5adb9;
+   font-size: 12px;
+   text-transform: uppercase;
+}
+
+.muted
+{
+   color: #c5cbd4;
 }
 
 .google-btn
 {
    width: 100%;
-   margin-top: 10px;
-   padding: 12px;
-   font-size: 15px;
+   text-align: center;
 }
 
-.log-compact
+@media (max-width: 1200px)
 {
-   background: rgba(7, 15, 36, 0.94);
-   border: 1px solid rgba(106, 147, 228, 0.5);
-   border-radius: 8px;
-   padding: 10px;
-   min-height: 40px;
-   white-space: pre-wrap;
-   margin-top: 12px;
-}
-
-.list
-{
-   display: grid;
-   gap: 8px;
-}
-
-.list button
-{
-   text-align: left;
-}
-
-#submissionsTable
-{
-   width: 100%;
-   border-collapse: collapse;
-   margin-top: 12px;
-   background: rgba(5, 13, 34, 0.45);
-}
-
-#submissionsTable th,
-#submissionsTable td
-{
-   border: 1px solid rgba(106, 147, 228, 0.42);
-   padding: 8px;
-   vertical-align: top;
-}
-
-#submissionsTable th
-{
-   background: rgba(29, 69, 153, 0.28);
-}
-
-#logBox
-{
-   background: rgba(7, 15, 36, 0.94);
-   border: 1px solid rgba(106, 147, 228, 0.5);
-   border-radius: 8px;
-   padding: 10px;
-   min-height: 120px;
-   white-space: pre-wrap;
-}
-
-.row
-{
-   margin: 8px 0;
-}
-
-.action-buttons
-{
-   display: grid;
-   gap: 6px;
-}
-
-.action-buttons button
-{
-   width: 132px;
-   padding-left: 10px;
-   padding-right: 10px;
-}
-
-@media (max-width: 900px)
-{
-   #app.app-shell
+   .dashboard-layout
    {
-      padding: 14px;
+      grid-template-columns: 230px 1fr;
    }
 
-   .top
+   .right-panel
    {
-      align-items: flex-start;
+      grid-column: 1 / span 2;
+   }
+}
+
+@media (max-width: 800px)
+{
+   .dashboard-layout
+   {
+      grid-template-columns: 1fr;
+   }
+
+   .right-panel,
+   .left-panel,
+   .center-panel
+   {
+      grid-column: auto;
+   }
+
+   .toolbar
+   {
       flex-direction: column;
-      gap: 10px;
-   }
-
-   select
-   {
-      min-width: 220px;
    }
 }

@@ -22,4 +22,4 @@ inline std::string ToLowerAscii(const std::string& value) {
     return out;
 }
 
-} // namespace integration
+}

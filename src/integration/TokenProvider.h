@@ -40,4 +40,4 @@ private:
     std::filesystem::path tokenPath_;
 };
 
-} // namespace integration
+}

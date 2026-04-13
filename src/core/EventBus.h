@@ -27,4 +27,4 @@ private:
     std::vector<IObserver*> observers_;
 };
 
-} // namespace core
+}

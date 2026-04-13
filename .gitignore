@@ -42,6 +42,14 @@ ipch/
 *.tmp
 *.temp
 *.cache
+*.gcda
+*.gcno
+*.gcov
+coverage.xml
+lcov.info
+
+.venv/
+__pycache__/
 
 .vscode/
 .idea/

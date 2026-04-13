@@ -429,6 +429,80 @@ namespace backend
          return courseId + "__" + courseWorkId;
       }
 
+      std::string TrimConfig(std::string value)
+      {
+         const auto begin = value.find_first_not_of(" \t\r\n");
+
+         if (begin == std::string::npos)
+         {
+            return "";
+         }
+
+         const auto end = value.find_last_not_of(" \t\r\n");
+         return value.substr(begin, end - begin + 1);
+      }
+
+      std::string ResolveSettingsFilePath()
+      {
+         const std::filesystem::path direct = std::filesystem::current_path() / "settings" / "app_settings.cfg";
+
+         if (std::filesystem::exists(direct))
+         {
+            return direct.string();
+         }
+
+         const std::filesystem::path parent = std::filesystem::current_path().parent_path() / "settings" / "app_settings.cfg";
+
+         if (std::filesystem::exists(parent))
+         {
+            return parent.string();
+         }
+
+         return direct.string();
+      }
+
+      std::string LoadConfiguredOllamaModel()
+      {
+         const std::string fallback = "aichecker-llama3.2-3b:latest";
+         std::ifstream input(ResolveSettingsFilePath());
+
+         if (!input.is_open())
+         {
+            return fallback;
+         }
+
+         std::string line;
+
+         while (std::getline(input, line))
+         {
+            const std::string trimmed = TrimConfig(line);
+
+            if (trimmed.empty() || trimmed[0] == '#')
+            {
+               continue;
+            }
+
+            const auto eq = trimmed.find('=');
+
+            if (eq == std::string::npos)
+            {
+               continue;
+            }
+
+            const std::string key = TrimConfig(trimmed.substr(0, eq));
+
+            if (key != "ollama.model")
+            {
+               continue;
+            }
+
+            const std::string value = TrimConfig(trimmed.substr(eq + 1));
+            return value.empty() ? fallback : value;
+         }
+
+         return fallback;
+      }
+
       bool SplitTaskId(const std::string& taskId, std::string& outCourseId, std::string& outCourseWorkId)
       {
          const auto pos = taskId.find("__");
@@ -499,7 +573,7 @@ namespace backend
          return {};
       }
 
-      std::string NormalizeSubmissionStatus(const std::string& state)
+      std::string NormalizeSubmissionStatus(const std::string& state, bool hasRepositoryUrl)
       {
          std::string normalized = state;
          std::transform(normalized.begin(), normalized.end(), normalized.begin(), [](unsigned char c)
@@ -507,12 +581,12 @@ namespace backend
             return static_cast<char>(std::toupper(c));
          });
 
-         if (normalized == "TURNED_IN" || normalized == "RETURNED")
+         if ((normalized == "TURNED_IN" || normalized == "RETURNED") && hasRepositoryUrl)
          {
-            return "completed";
+            return "turned_in";
          }
 
-         return "working";
+         return "missing";
       }
 
       std::optional<SessionInfo> RequireAuth(const httplib::Request& req, LocalSessionStore& sessions)
@@ -547,12 +621,15 @@ namespace backend
          report << "Email: " << sub.studentEmail << "\n";
          report << "Repository: " << sub.repositoryUrl << "\n";
          report << "Status: " << sub.status << "\n";
+         report << "Late: " << (sub.late ? "true" : "false") << "\n";
          report << "AI score: " << sub.aiScore << "\n";
          report << "Plagiarism score: " << sub.plagiarismScore << "\n";
          report << "Grade: " << sub.grade << "\n";
          report << "Approved: " << (sub.approved ? "true" : "false") << "\n";
          report << "Sent: " << (sub.sent ? "true" : "false") << "\n";
          report << "\nTeacher feedback:\n" << sub.feedback << "\n";
+         report << "\nTeacher comment:\n" << sub.teacherComment << "\n";
+         report << "\nDetailed description:\n" << sub.detailedDescription << "\n";
          report << "\nAI detailed report:\n" << sub.aiReport << "\n";
          return report.str();
       }
@@ -869,30 +946,41 @@ namespace backend
             return;
          }
 
-         int working = 0;
-         int completed = 0;
+         int missing = 0;
+         int turnedIn = 0;
+         int turnedInLate = 0;
 
          if (payload.contains("studentSubmissions") && payload["studentSubmissions"].is_array())
          {
             for (const auto& submission : payload["studentSubmissions"])
             {
-               const std::string status = NormalizeSubmissionStatus(submission.value("state", ""));
+               const std::string repoUrl = ExtractGithubUrl(submission);
+               const std::string status = NormalizeSubmissionStatus(submission.value("state", ""), !repoUrl.empty());
 
-               if (status == "completed")
+               const bool late = submission.value("late", false);
+
+               if (status == "turned_in" && late)
                {
-                  completed++;
+                  turnedInLate++;
+               }
+               else if (status == "turned_in")
+               {
+                  turnedIn++;
                }
                else
                {
-                  working++;
+                  missing++;
                }
             }
          }
 
          JsonResponse(res, {
             {"taskId", taskId},
-            {"working", working},
-            {"completed", completed},
+            {"working", missing},
+            {"completed", turnedIn + turnedInLate},
+            {"missing", missing},
+            {"turnedIn", turnedIn},
+            {"turnedInLate", turnedInLate},
             {"inReview", 0}
          });
       });
@@ -970,8 +1058,9 @@ namespace backend
                   SubmissionItem item;
                   item.id = submissionId;
                   item.taskId = taskId;
-                  item.status = NormalizeSubmissionStatus(submission.value("state", ""));
                   item.repositoryUrl = ExtractGithubUrl(submission);
+                  item.status = NormalizeSubmissionStatus(submission.value("state", ""), !item.repositoryUrl.empty());
+                  item.late = submission.value("late", false);
 
                   const auto userIt = users.find(userId);
 
@@ -1034,9 +1123,34 @@ namespace backend
 
          const std::string taskId = req.matches[1];
          auto refs = deps.data.SubmissionsByTask(taskId);
+
+         if (!req.body.empty())
+         {
+            nlohmann::json body;
+
+            if (TryParseBody(req, body))
+            {
+               const std::string submissionId = body.value("submissionId", "");
+
+               if (!submissionId.empty())
+               {
+                  refs.erase(std::remove_if(refs.begin(), refs.end(), [&](SubmissionItem* item)
+                  {
+                     return item == nullptr || item->id != submissionId;
+                  }), refs.end());
+
+                  if (refs.empty())
+                  {
+                     JsonResponse(res, { {"ok", false}, {"message", "Роботу не знайдено"} }, 404);
+                     return;
+                  }
+               }
+            }
+         }
+
          const nlohmann::json pulled = deps.repoService.Pull(refs);
          deps.cache.Set("repos_" + taskId, pulled);
-         JsonResponse(res, { {"rows", pulled} });
+         JsonResponse(res, { {"ok", true}, {"rows", pulled} });
       });
 
       server.Post(R"(/api/tasks/([a-zA-Z0-9_-]+)/send-grades)", [&](const httplib::Request& req, httplib::Response& res)
@@ -1056,6 +1170,17 @@ namespace backend
          }
 
          const std::string taskId = req.matches[1];
+         std::string targetSubmissionId;
+
+         if (!req.body.empty())
+         {
+            nlohmann::json body;
+            if (TryParseBody(req, body))
+            {
+               targetSubmissionId = body.value("submissionId", "");
+            }
+         }
+
          std::string courseId;
          std::string courseWorkId;
 
@@ -1071,6 +1196,11 @@ namespace backend
 
          for (auto* sub : deps.data.SubmissionsByTask(taskId))
          {
+            if (!targetSubmissionId.empty() && sub->id != targetSubmissionId)
+            {
+               continue;
+            }
+
             nlohmann::json row;
             row["submissionId"] = sub->id;
             row["studentName"] = sub->studentName;
@@ -1092,15 +1222,26 @@ namespace backend
                "/studentSubmissions/" + sub->id +
                "?updateMask=draftGrade";
 
+            int gradeToSend = sub->grade;
+
+            if (sub->late && gradeToSend > 4)
+            {
+               gradeToSend = 4;
+            }
+
             nlohmann::json body = {
-               {"draftGrade", sub->grade}
+               {"draftGrade", gradeToSend}
             };
 
             if (ClassroomPatchJson(patchPath, session->accessToken, body, error))
             {
                sent++;
                row["ok"] = true;
-               row["grade"] = sub->grade;
+               row["grade"] = gradeToSend;
+               if (sub->late && sub->grade > 4)
+               {
+                  row["message"] = "Late submission: оцінку автоматично обмежено до 4. Для 5 скоригуйте вручну в Classroom.";
+               }
             }
             else
             {
@@ -1112,6 +1253,12 @@ namespace backend
             row["message"] = "Підтримується тільки на Windows";
 #endif
             rows.push_back(row);
+         }
+
+         if (!targetSubmissionId.empty() && rows.empty())
+         {
+            JsonResponse(res, { {"ok", false}, {"message", "Роботу не знайдено"} }, 404);
+            return;
          }
 
          JsonResponse(res, {
@@ -1133,11 +1280,27 @@ namespace backend
          }
 
          const std::string taskId = req.matches[1];
+         std::string targetSubmissionId;
+
+         if (!req.body.empty())
+         {
+            nlohmann::json body;
+            if (TryParseBody(req, body))
+            {
+               targetSubmissionId = body.value("submissionId", "");
+            }
+         }
+
          nlohmann::json rows = nlohmann::json::array();
          int sent = 0;
 
          for (auto* sub : deps.data.SubmissionsByTask(taskId))
          {
+            if (!targetSubmissionId.empty() && sub->id != targetSubmissionId)
+            {
+               continue;
+            }
+
             nlohmann::json result;
 #ifdef _WIN32
             if (!session->accessToken.empty() && !sub->studentEmail.empty())
@@ -1188,6 +1351,12 @@ namespace backend
             rows.push_back(result);
          }
 
+         if (!targetSubmissionId.empty() && rows.empty())
+         {
+            JsonResponse(res, { {"ok", false}, {"message", "Роботу не знайдено"} }, 404);
+            return;
+         }
+
          JsonResponse(res, {
             {"ok", true},
             {"sent", sent},
@@ -1206,12 +1375,39 @@ namespace backend
          }
 
          const std::string taskId = req.matches[1];
+         std::string targetSubmissionId;
+
+         if (!req.body.empty())
+         {
+            nlohmann::json body;
+            if (TryParseBody(req, body))
+            {
+               targetSubmissionId = body.value("submissionId", "");
+            }
+         }
+
          const auto now = static_cast<long long>(std::time(nullptr));
-         const std::string exportName = "task_" + taskId + "_" + std::to_string(now);
+         const std::string exportName = targetSubmissionId.empty()
+            ? "task_" + taskId + "_" + std::to_string(now)
+            : "submission_" + targetSubmissionId + "_" + std::to_string(now);
          const std::filesystem::path exportRoot = std::filesystem::path(OutboxDir()) / "exports" / exportName;
          std::filesystem::create_directories(exportRoot);
 
          auto refs = deps.data.SubmissionsByTask(taskId);
+
+         if (!targetSubmissionId.empty())
+         {
+            refs.erase(std::remove_if(refs.begin(), refs.end(), [&](SubmissionItem* item)
+            {
+               return item == nullptr || item->id != targetSubmissionId;
+            }), refs.end());
+
+            if (refs.empty())
+            {
+               JsonResponse(res, { {"ok", false}, {"message", "Роботу не знайдено"} }, 404);
+               return;
+            }
+         }
 
          for (const auto* sub : refs)
          {
@@ -1294,7 +1490,7 @@ namespace backend
          }
 
          const std::string submissionId = body.value("submissionId", "");
-         const std::string model = body.value("model", "llama3.2:3b");
+         const std::string model = body.value("model", LoadConfiguredOllamaModel());
          const double temperature = body.value("temperature", 0.1);
 
          SubmissionItem* sub = deps.data.SubmissionById(submissionId);
@@ -1357,8 +1553,9 @@ namespace backend
          }
 
          const std::string submissionId = body.value("submissionId", "");
-         const int grade = body.value("grade", 2);
+         int grade = body.value("grade", 2);
          const std::string feedback = body.value("feedback", "");
+         const bool allowLateMaxGrade = body.value("allowLateMaxGrade", false);
 
          SubmissionItem* sub = deps.data.SubmissionById(submissionId);
 
@@ -1368,7 +1565,71 @@ namespace backend
             return;
          }
 
+         if (sub->late && grade > 4 && !allowLateMaxGrade)
+         {
+            grade = 4;
+         }
+
+         if (body.contains("teacherComment") && body["teacherComment"].is_string())
+         {
+            sub->teacherComment = body["teacherComment"].get<std::string>();
+         }
+
+         if (body.contains("detailedDescription") && body["detailedDescription"].is_string())
+         {
+            sub->detailedDescription = body["detailedDescription"].get<std::string>();
+         }
+
          JsonResponse(res, deps.finalService.Approve(*sub, grade, feedback));
+      });
+
+      server.Post("/api/review/notes", [&](const httplib::Request& req, httplib::Response& res)
+      {
+         const auto session = RequireAuth(req, deps.sessions);
+
+         if (!session.has_value())
+         {
+            JsonResponse(res, { {"ok", false}, {"message", "Не авторизовано"} }, 401);
+            return;
+         }
+
+         nlohmann::json body;
+
+         if (!TryParseBody(req, body))
+         {
+            JsonResponse(res, { {"ok", false}, {"message", "Невірний JSON"} }, 400);
+            return;
+         }
+
+         const std::string submissionId = body.value("submissionId", "");
+         SubmissionItem* sub = deps.data.SubmissionById(submissionId);
+
+         if (sub == nullptr)
+         {
+            JsonResponse(res, { {"ok", false}, {"message", "Роботу не знайдено"} }, 404);
+            return;
+         }
+
+         if (body.contains("teacherComment") && body["teacherComment"].is_string())
+         {
+            sub->teacherComment = body["teacherComment"].get<std::string>();
+            if (sub->feedback.empty())
+            {
+               sub->feedback = sub->teacherComment;
+            }
+         }
+
+         if (body.contains("detailedDescription") && body["detailedDescription"].is_string())
+         {
+            sub->detailedDescription = body["detailedDescription"].get<std::string>();
+         }
+
+         JsonResponse(res, {
+            {"ok", true},
+            {"submissionId", sub->id},
+            {"teacherComment", sub->teacherComment},
+            {"detailedDescription", sub->detailedDescription}
+         });
       });
 
       server.Post("/api/review/send-email", [&](const httplib::Request& req, httplib::Response& res)
@@ -1406,7 +1667,7 @@ namespace backend
                session->accessToken,
                sub->studentEmail,
                "Результат перевірки роботи",
-               sub->feedback.empty() ? "Робота перевірена." : sub->feedback,
+               (sub->teacherComment.empty() ? (sub->feedback.empty() ? "Робота перевірена." : sub->feedback) : sub->teacherComment),
                err);
 
             if (mailed)

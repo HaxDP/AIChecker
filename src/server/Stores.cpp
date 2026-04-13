@@ -130,8 +130,9 @@ namespace backend
 
    nlohmann::json DataStore::TaskStats(const std::string& taskId)
    {
-      int working = 0;
-      int completed = 0;
+      int missing = 0;
+      int turnedIn = 0;
+      int turnedInLate = 0;
       int inReview = 0;
 
       for (auto* s : SubmissionsByTask(taskId))
@@ -142,20 +143,27 @@ namespace backend
             continue;
          }
 
-         if (s->status == "completed")
+         if (s->status == "turned_in" && s->late)
          {
-            completed++;
+            turnedInLate++;
+         }
+         else if (s->status == "turned_in")
+         {
+            turnedIn++;
          }
          else
          {
-            working++;
+            missing++;
          }
       }
 
       nlohmann::json result;
       result["taskId"] = taskId;
-      result["working"] = working;
-      result["completed"] = completed;
+      result["working"] = missing;
+      result["completed"] = turnedIn + turnedInLate;
+      result["missing"] = missing;
+      result["turnedIn"] = turnedIn;
+      result["turnedInLate"] = turnedInLate;
       result["inReview"] = inReview;
       return result;
    }
@@ -204,6 +212,8 @@ namespace backend
             item.approved = existing->second.approved;
             item.sent = existing->second.sent;
             item.feedback = existing->second.feedback;
+            item.teacherComment = existing->second.teacherComment;
+            item.detailedDescription = existing->second.detailedDescription;
             item.aiReport = existing->second.aiReport;
          }
 

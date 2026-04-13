@@ -139,4 +139,4 @@ private:
 #endif
 };
 
-} // namespace integration
+}

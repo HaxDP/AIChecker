@@ -32,12 +32,15 @@ namespace backend
       std::string studentEmail;
       std::string repositoryUrl;
       std::string status;
+      bool late = false;
       double aiScore = 0.0;
       double plagiarismScore = 0.0;
       int grade = 0;
       bool approved = false;
       bool sent = false;
       std::string feedback = "";
+      std::string teacherComment = "";
+      std::string detailedDescription = "";
       std::string aiReport = "";
    };
 

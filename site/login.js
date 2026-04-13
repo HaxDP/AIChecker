@@ -3,7 +3,10 @@ const loginLog = document.getElementById("loginLog");
 
 function log(msg)
 {
-   loginLog.textContent += msg + "\n";
+   if (loginLog)
+   {
+      loginLog.textContent += msg + "\n";
+   }
 }
 
 async function apiGet(path)
@@ -82,7 +85,10 @@ async function loginWithGooglePopup()
 
 loginBtn.onclick = async function()
 {
-   loginLog.textContent = "";
+   if (loginLog)
+   {
+      loginLog.textContent = "";
+   }
    log("Відкриваємо Google вікно авторизації...");
    await loginWithGooglePopup();
 };

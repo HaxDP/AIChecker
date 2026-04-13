@@ -7,56 +7,86 @@
    <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
-   <div class="space-bg"></div>
-   <div id="app" class="app-shell">
-      <header class="top glass">
-         <div>
-            <p class="kicker">AIChecker</p>
-            <h1>Система перевірки робіт</h1>
-         </div>
-         <div id="userBox"></div>
-      </header>
+   <div id="app" class="dashboard-layout">
+      <aside class="panel left-panel">
+         <h1>AIChecker</h1>
+         <div id="userBox" class="user-box"></div>
 
-      <section id="dashboardSection" class="card glass">
-         <h2>Класи</h2>
+         <h3>Класи</h3>
          <div id="classesList" class="list"></div>
-      </section>
 
-      <section id="tasksSection" class="card glass hidden">
-         <h2 id="tasksTitle">Завдання класу</h2>
+         <h3 id="tasksTitle">Завдання</h3>
          <div id="tasksList" class="list"></div>
-      </section>
 
-      <section id="reviewSection" class="card glass hidden">
-         <h2 id="reviewTitle">Перевірка робіт</h2>
-
-         <div class="row form-row">
-            <button id="pullBtn">Підтягнути репозиторії GitHub</button>
-            <button id="sendGradesBtn">Надіслати оцінки в Classroom</button>
-            <button id="sendCommentsBtn">Надіслати коментарі на email</button>
-            <button id="exportZipBtn">Експортувати ZIP</button>
+         <h3>Фільтр статусу</h3>
+         <div id="statusFilterMenu" class="list">
+            <button data-filter="all" class="filter-btn active">Усі</button>
+            <button data-filter="missing" class="filter-btn">Відсутні</button>
+            <button data-filter="turned_in_late" class="filter-btn">Здано із запізненням</button>
+            <button data-filter="turned_in" class="filter-btn">Здано</button>
+            <button data-filter="checked" class="filter-btn">Перевірено</button>
+            <button data-filter="sended" class="filter-btn">Надіслано</button>
          </div>
+      </aside>
+
+      <main class="panel center-panel">
+         <div class="toolbar">
+            <h2 id="reviewTitle">Список студентів</h2>
+            <div class="toolbar-actions">
+               <button id="pullBtn">Отримати репозиторії</button>
+               <button id="runChecksAllBtn">Перевірити на AI та плагіат</button>
+               <button id="sendGradesBtn">Надіслати оцінки</button>
+               <button id="sendCommentsBtn">Надіслати коментарі</button>
+               <button id="exportZipBtn">Експорт ZIP</button>
+            </div>
+         </div>
+         <div id="checkProgress" class="checking-indicator hidden" aria-live="polite"></div>
 
          <table id="submissionsTable">
             <thead>
                <tr>
                   <th>Студент</th>
-                  <th>Репозиторій</th>
                   <th>AI %</th>
-                  <th>Плагіат %</th>
+                  <th>PL %</th>
                   <th>Оцінка</th>
                   <th>Статус</th>
-                  <th>Дії</th>
                </tr>
             </thead>
             <tbody></tbody>
          </table>
-      </section>
 
-      <section id="logSection" class="card glass">
-         <h2>Події</h2>
-         <pre id="logBox"></pre>
-      </section>
+      </main>
+
+      <aside class="panel right-panel">
+         <h2>Обраний студент</h2>
+         <div id="selectedStudentCard" class="selected-card">
+            Виберіть студента зі списку.
+         </div>
+
+         <div class="right-actions">
+            <button id="pullOneBtn">Отримати репозиторій</button>
+            <button id="sendGradeOneBtn">Надіслати оцінку</button>
+            <button id="sendCommentOneBtn">Надіслати коментар</button>
+            <button id="exportOneBtn">Експорт ZIP</button>
+            <button id="runChecksOneBtn">Запустити AI + PL</button>
+         </div>
+
+         <label for="gradeInput">Оцінка</label>
+         <input id="gradeInput" type="number" min="2" max="5" step="1" value="4">
+
+         <label class="checkbox-line">
+            <input id="allowLateMaxGrade" type="checkbox">
+            Дозволити 5 для запізнілої роботи
+         </label>
+
+         <label for="teacherCommentInput">Коментар для студента</label>
+         <textarea id="teacherCommentInput" rows="5" placeholder="Введіть коментар..." ></textarea>
+
+         <button id="saveNotesBtn">Зберегти коментар</button>
+
+         <h3>Детальний AI-звіт</h3>
+         <pre id="aiReportBox" class="report-box">-</pre>
+      </aside>
    </div>
 
    <script src="/dashboard.js"></script>

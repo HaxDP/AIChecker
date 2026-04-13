@@ -174,9 +174,8 @@ function submissionActionsCell(sub)
    aiBtn.textContent = "AI";
    aiBtn.onclick = async function()
    {
-      const model = "llama3.2:3b";
       const temperature = Number(temperatureInput.value || 0.1);
-      const data = await apiPost("/api/review/ai", { submissionId: sub.id, model, temperature });
+      const data = await apiPost("/api/review/ai", { submissionId: sub.id, temperature });
       log("AI " + sub.studentName + ": " + data.aiScore + "%");
       await reloadSubmissions();
    };

@@ -71,4 +71,4 @@ private:
     bool useClassroomApiImport_ = true;
 };
 
-} // namespace app
+}
