@@ -672,6 +672,7 @@ namespace backend
          return !outCourseId.empty() && !outCourseWorkId.empty();
       }
 
+#ifdef _WIN32
       std::string BuildClassroomTeacherSubmissionsUrl(const std::string& courseId, const std::string& courseWorkId)
       {
          if (courseId.empty() || courseWorkId.empty())
@@ -692,6 +693,7 @@ namespace backend
             "/a/" + encodedCourseWorkId +
             "/submissions/by-status/and-sort-name/all/all";
       }
+      #endif
 
       std::string ExtractGithubUrl(const nlohmann::json& node)
       {
