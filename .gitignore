@@ -50,6 +50,7 @@ lcov.info
 
 .venv/
 __pycache__/
+runtime_data/
 
 .vscode/
 .idea/
@@ -61,4 +62,5 @@ settings/google/access_token.txt
 settings/github/token.txt
 settings/**/token.txt
 settings/**/*credentials*.json
+settings/plagiarism_sites.json
 КурсоваРоботаООП.txt

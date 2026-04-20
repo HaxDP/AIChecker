@@ -15,11 +15,16 @@ body
 .dashboard-layout
 {
    display: grid;
-   grid-template-columns: 260px 1fr 340px;
+   grid-template-columns: var(--left-panel-width, 260px) minmax(0, 1fr) var(--right-panel-width, 340px);
    gap: 12px;
    min-height: 100vh;
    padding: 12px;
    box-sizing: border-box;
+}
+
+.left-panel
+{
+   position: relative;
 }
 
 .panel
@@ -235,10 +240,84 @@ button:hover
    text-align: center;
 }
 
+.left-panel-resize-handle,
+.right-panel-resize-handle
+{
+   position: absolute;
+   top: 0;
+   bottom: 0;
+   width: 10px;
+   cursor: col-resize;
+   background: transparent;
+}
+
+.left-panel-resize-handle
+{
+   right: -8px;
+}
+
+.right-panel-resize-handle
+{
+   left: -8px;
+}
+
+.left-panel-resize-handle::before,
+.right-panel-resize-handle::before
+{
+   content: "";
+   position: absolute;
+   left: 4px;
+   top: 14px;
+   bottom: 14px;
+   width: 2px;
+   border-radius: 2px;
+   background: #5f6671;
+}
+
+.right-panel-resize-handle
+{
+   z-index: 2;
+}
+
+.right-panel-resize-handle::before
+{
+   z-index: 2;
+}
+
+.dashboard-layout.resizing
+{
+   user-select: none;
+   cursor: col-resize;
+}
+
+.section-toggle
+{
+   width: 100%;
+   display: flex;
+   align-items: center;
+   justify-content: space-between;
+   gap: 8px;
+   text-align: left;
+}
+
+.section-toggle-arrow
+{
+   font-size: 16px;
+   line-height: 1;
+}
+
+.ai-report-section
+{
+   margin-top: 10px;
+}
+
 .right-panel
 {
+   position: relative;
    max-height: calc(100vh - 24px);
    overflow-y: auto;
+   overflow-x: hidden;
+   min-width: 0;
 }
 
 label
@@ -266,6 +345,17 @@ textarea
    resize: vertical;
 }
 
+#openClassroomBtn
+{
+   width: 100%;
+   text-align: center;
+}
+
+#openClassroomBtn
+{
+   margin-top: 8px;
+}
+
 .checkbox-line
 {
    display: flex;
@@ -288,6 +378,8 @@ textarea
    margin-bottom: 10px;
    min-height: 88px;
    white-space: pre-wrap;
+   overflow-wrap: anywhere;
+   word-break: break-word;
 }
 
 .report-box,
@@ -299,6 +391,9 @@ textarea
    border-radius: 8px;
    padding: 10px;
    white-space: pre-wrap;
+   overflow-wrap: anywhere;
+   word-break: break-word;
+   max-width: 100%;
 }
 
 .report-box
@@ -370,6 +465,17 @@ textarea
    .right-panel
    {
       grid-column: 1 / span 2;
+   }
+
+   .right-panel-resize-handle
+   {
+      display: none;
+   }
+
+   .left-panel-resize-handle,
+   .right-panel-resize-handle
+   {
+      display: none;
    }
 }
 

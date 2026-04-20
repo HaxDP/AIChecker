@@ -33,14 +33,23 @@ namespace backend
       std::vector<TaskItem> TasksByClass(const std::string& classId) const;
       std::vector<SubmissionItem*> SubmissionsByTask(const std::string& taskId);
       SubmissionItem* SubmissionById(const std::string& id);
+      SubmissionItem* SubmissionByTaskAndId(const std::string& taskId, const std::string& id);
       nlohmann::json TaskStats(const std::string& taskId);
       void ReplaceClasses(const std::vector<ClassItem>& classes);
       void ReplaceTasksForClass(const std::string& classId, const std::vector<TaskItem>& tasks);
       void ReplaceSubmissionsForTask(const std::string& taskId, const std::vector<SubmissionItem>& submissions);
+      void PersistReviewState();
 
    private:
+      static nlohmann::json SerializeReviewState(const SubmissionItem& item);
+      static void ApplyReviewState(SubmissionItem& item, const nlohmann::json& state);
+      void LoadReviewState();
+      void SaveReviewState() const;
+
       std::vector<ClassItem> classes_;
       std::vector<TaskItem> tasks_;
       std::vector<SubmissionItem> submissions_;
+      nlohmann::json persistedReviewState_;
+      std::string reviewStatePath_;
    };
 }

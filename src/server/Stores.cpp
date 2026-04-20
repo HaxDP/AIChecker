@@ -9,6 +9,24 @@
 
 namespace backend
 {
+   namespace
+   {
+      std::string ReviewStatePath()
+      {
+         return (std::filesystem::path(CacheDir()) / "submissions_review_state.json").string();
+      }
+
+      std::string ReviewStateKey(const std::string& taskId, const std::string& submissionId)
+      {
+         if (taskId.empty())
+         {
+            return submissionId;
+         }
+
+         return taskId + "::" + submissionId;
+      }
+   }
+
    std::string LocalSessionStore::Create(const GoogleAccount& account, const std::string& accessToken)
    {
       const std::string sid = RandomId();
@@ -77,7 +95,91 @@ namespace backend
    }
 
    DataStore::DataStore()
+      : persistedReviewState_(nlohmann::json::object()),
+        reviewStatePath_(ReviewStatePath())
    {
+      LoadReviewState();
+   }
+
+   nlohmann::json DataStore::SerializeReviewState(const SubmissionItem& item)
+   {
+      nlohmann::json out;
+      out["aiScore"] = item.aiScore;
+      out["plagiarismScore"] = item.plagiarismScore;
+      out["grade"] = item.grade;
+      out["approved"] = item.approved;
+      out["sent"] = item.sent;
+      out["feedback"] = item.feedback;
+      out["teacherComment"] = item.teacherComment;
+      out["detailedDescription"] = item.detailedDescription;
+      out["aiReport"] = item.aiReport;
+      return out;
+   }
+
+   void DataStore::ApplyReviewState(SubmissionItem& item, const nlohmann::json& state)
+   {
+      item.aiScore = state.value("aiScore", item.aiScore);
+      item.plagiarismScore = state.value("plagiarismScore", item.plagiarismScore);
+      item.grade = state.value("grade", item.grade);
+      item.approved = state.value("approved", item.approved);
+      item.sent = state.value("sent", item.sent);
+      item.feedback = state.value("feedback", item.feedback);
+      item.teacherComment = state.value("teacherComment", item.teacherComment);
+      item.detailedDescription = state.value("detailedDescription", item.detailedDescription);
+      item.aiReport = state.value("aiReport", item.aiReport);
+   }
+
+   void DataStore::LoadReviewState()
+   {
+      const std::string raw = ReadFileText(reviewStatePath_);
+
+      if (raw.empty())
+      {
+         persistedReviewState_ = nlohmann::json::object();
+         return;
+      }
+
+      try
+      {
+         persistedReviewState_ = nlohmann::json::parse(raw);
+      }
+      catch (...)
+      {
+         persistedReviewState_ = nlohmann::json::object();
+      }
+
+      if (!persistedReviewState_.is_object())
+      {
+         persistedReviewState_ = nlohmann::json::object();
+      }
+   }
+
+   void DataStore::SaveReviewState() const
+   {
+      if (persistedReviewState_.is_object())
+      {
+         WriteFileText(reviewStatePath_, persistedReviewState_.dump(2));
+      }
+   }
+
+   void DataStore::PersistReviewState()
+   {
+      if (!persistedReviewState_.is_object())
+      {
+         persistedReviewState_ = nlohmann::json::object();
+      }
+
+      for (const auto& item : submissions_)
+      {
+         if (item.id.empty())
+         {
+            continue;
+         }
+
+         persistedReviewState_[ReviewStateKey(item.taskId, item.id)] = SerializeReviewState(item);
+      }
+
+      SaveReviewState();
    }
 
    const std::vector<ClassItem>& DataStore::Classes() const
@@ -120,6 +222,19 @@ namespace backend
       for (auto& s : submissions_)
       {
          if (s.id == id)
+         {
+            return &s;
+         }
+      }
+
+      return nullptr;
+   }
+
+   SubmissionItem* DataStore::SubmissionByTaskAndId(const std::string& taskId, const std::string& id)
+   {
+      for (auto& s : submissions_)
+      {
+         if (s.taskId == taskId && s.id == id)
          {
             return &s;
          }
@@ -203,6 +318,7 @@ namespace backend
       for (auto item : submissions)
       {
          const auto existing = oldById.find(item.id);
+         const std::string stateKey = ReviewStateKey(item.taskId, item.id);
 
          if (existing != oldById.end())
          {
@@ -216,8 +332,24 @@ namespace backend
             item.detailedDescription = existing->second.detailedDescription;
             item.aiReport = existing->second.aiReport;
          }
+         else if (persistedReviewState_.is_object() && persistedReviewState_.contains(stateKey) && persistedReviewState_[stateKey].is_object())
+         {
+            ApplyReviewState(item, persistedReviewState_[stateKey]);
+         }
+         else if (persistedReviewState_.is_object() && persistedReviewState_.contains(item.id) && persistedReviewState_[item.id].is_object())
+         {
+            // Backward compatibility with old persistence keys that used only submissionId.
+            ApplyReviewState(item, persistedReviewState_[item.id]);
+         }
 
          submissions_.push_back(item);
+
+         if (!item.id.empty())
+         {
+            persistedReviewState_[stateKey] = SerializeReviewState(item);
+         }
       }
+
+      SaveReviewState();
    }
 }

@@ -31,13 +31,17 @@ namespace backend
    public:
       explicit PlagiarismService(std::string datasetPath);
       nlohmann::json Analyze(SubmissionItem& submission);
+      nlohmann::json GetSitesConfig() const;
+      bool UpdateSitesConfig(const std::vector<std::string>& whitelist, const std::vector<std::string>& blacklist, std::string& error);
+      bool ReplaceDataset(const std::string& datasetText, std::string& error, size_t& outRows);
 
    private:
-      std::vector<std::string> ReadDataset();
+      std::vector<std::string> ReadDataset() const;
       std::set<std::string> Tokenize(const std::string& text);
       double Jaccard(const std::set<std::string>& a, const std::set<std::string>& b);
 
       std::string datasetPath_;
+      std::string sitesConfigPath_;
    };
 
    class FinalizationService

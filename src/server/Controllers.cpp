@@ -184,6 +184,106 @@ namespace backend
          return out;
       }
 
+      std::string ReadWinHttpBody(HINTERNET hRequest)
+      {
+         std::string body;
+         DWORD bytesAvailable = 0;
+
+         do
+         {
+            if (!WinHttpQueryDataAvailable(hRequest, &bytesAvailable))
+            {
+               break;
+            }
+
+            if (bytesAvailable == 0)
+            {
+               break;
+            }
+
+            std::string chunk(bytesAvailable, '\0');
+            DWORD bytesRead = 0;
+
+            if (!WinHttpReadData(hRequest, chunk.data(), bytesAvailable, &bytesRead))
+            {
+               break;
+            }
+
+            chunk.resize(bytesRead);
+            body += chunk;
+         }
+         while (bytesAvailable > 0);
+
+         return body;
+      }
+
+      std::string ToLowerAscii(std::string text)
+      {
+         std::transform(text.begin(), text.end(), text.begin(), [](unsigned char ch)
+         {
+            return static_cast<char>(std::tolower(ch));
+         });
+
+         return text;
+      }
+
+      std::string ExtractGoogleApiErrorMessage(const std::string& rawBody)
+      {
+         if (rawBody.empty())
+         {
+            return "";
+         }
+
+         try
+         {
+            const auto payload = nlohmann::json::parse(rawBody);
+
+            if (payload.contains("error"))
+            {
+               const auto& error = payload["error"];
+
+               if (error.is_object())
+               {
+                  const std::string message = error.value("message", "");
+
+                  if (!message.empty())
+                  {
+                     return message;
+                  }
+
+                  if (error.contains("errors") && error["errors"].is_array() && !error["errors"].empty() && error["errors"][0].is_object())
+                  {
+                     const std::string nestedMessage = error["errors"][0].value("message", "");
+                     if (!nestedMessage.empty())
+                     {
+                        return nestedMessage;
+                     }
+
+                     const std::string nestedReason = error["errors"][0].value("reason", "");
+                     if (!nestedReason.empty())
+                     {
+                        return nestedReason;
+                     }
+                  }
+               }
+               else if (error.is_string())
+               {
+                  return error.get<std::string>();
+               }
+            }
+
+            if (payload.contains("error_description") && payload["error_description"].is_string())
+            {
+               return payload["error_description"].get<std::string>();
+            }
+         }
+         catch (...)
+         {
+         }
+
+         return "";
+      }
+
       bool ClassroomPatchJson(const std::string& path, const std::string& accessToken, const nlohmann::json& body, std::string& outError)
       {
          HINTERNET hSession = WinHttpOpen(L"AIChecker/1.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
@@ -253,6 +353,7 @@ namespace backend
          DWORD statusCode = 0;
          DWORD size = sizeof(statusCode);
          WinHttpQueryHeaders(hRequest, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_HEADER_NAME_BY_INDEX, &statusCode, &size, WINHTTP_NO_HEADER_INDEX);
+         const std::string responseBody = ReadWinHttpBody(hRequest);
 
          WinHttpCloseHandle(hRequest);
          WinHttpCloseHandle(hConnect);
@@ -261,13 +362,39 @@ namespace backend
          if (statusCode < 200 || statusCode >= 300)
          {
             outError = "Classroom PATCH HTTP статус=" + std::to_string(statusCode);
+            const std::string apiMessage = ExtractGoogleApiErrorMessage(responseBody);
+
+            if (!apiMessage.empty())
+            {
+               outError += " | " + apiMessage;
+            }
+
+            if (statusCode == 403)
+            {
+               const std::string details = ToLowerAscii(apiMessage);
+
+               if (details.find("projectpermissiondenied") != std::string::npos ||
+                  details.find("developer console project is not permitted") != std::string::npos)
+               {
+                  outError += " (обмеження Classroom API: цей Google Cloud OAuth проект не має права змінювати оцінку для цього завдання. PATCH дозволено лише для coursework, створеного тим самим OAuth client/project)";
+               }
+               else if (details.find("insufficient authentication scopes") != std::string::npos || details.find("insufficient scopes") != std::string::npos)
+               {
+                  outError += " (потрібен scope classroom.coursework.students; перелогіньтесь через Google popup)";
+               }
+               else
+               {
+                  outError += " (перевірте роль: акаунт має бути викладачем цього курсу і мати право змінювати оцінки)";
+               }
+            }
+
             return false;
          }
 
          return true;
       }
 
-      std::string Base64UrlEncode(const std::string& input)
+      std::string Base64Encode(const std::string& input)
       {
          static const char* table = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
          std::string out;
@@ -296,6 +423,13 @@ namespace backend
             out.push_back('=');
          }
 
+         return out;
+      }
+
+      std::string Base64UrlEncode(const std::string& input)
+      {
+         std::string out = Base64Encode(input);
+
          for (char& ch : out)
          {
             if (ch == '+') ch = '-';
@@ -310,6 +444,11 @@ namespace backend
          return out;
       }
 
+      std::string EncodeMimeHeaderUtf8(const std::string& value)
+      {
+         return "=?UTF-8?B?" + Base64Encode(value) + "?=";
+      }
+
       bool GmailSendMessage(const std::string& accessToken, const std::string& toEmail, const std::string& subject, const std::string& textBody, std::string& outError)
       {
          if (toEmail.empty())
@@ -318,9 +457,12 @@ namespace backend
             return false;
          }
 
+         const std::string normalizedSubject = subject.empty() ? "Результат перевірки роботи" : subject;
+         const std::string encodedSubject = EncodeMimeHeaderUtf8(normalizedSubject);
+
          const std::string mime =
             "To: " + toEmail + "\r\n" +
-            "Subject: " + subject + "\r\n" +
+            "Subject: " + encodedSubject + "\r\n" +
             "Content-Type: text/plain; charset=UTF-8\r\n" +
             "MIME-Version: 1.0\r\n" +
             "\r\n" +
@@ -396,6 +538,7 @@ namespace backend
          DWORD statusCode = 0;
          DWORD size = sizeof(statusCode);
          WinHttpQueryHeaders(hRequest, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_HEADER_NAME_BY_INDEX, &statusCode, &size, WINHTTP_NO_HEADER_INDEX);
+         const std::string responseBody = ReadWinHttpBody(hRequest);
 
          WinHttpCloseHandle(hRequest);
          WinHttpCloseHandle(hConnect);
@@ -403,7 +546,19 @@ namespace backend
 
          if (statusCode < 200 || statusCode >= 300)
          {
-            outError = "Gmail API HTTP статус=" + std::to_string(statusCode) + " (потрібен scope gmail.send)";
+            outError = "Gmail API HTTP статус=" + std::to_string(statusCode);
+            const std::string apiMessage = ExtractGoogleApiErrorMessage(responseBody);
+
+            if (!apiMessage.empty())
+            {
+               outError += " | " + apiMessage;
+            }
+
+            if (statusCode == 403)
+            {
+               outError += " (потрібен scope gmail.send; перелогіньтесь через Google popup)";
+            }
+
             return false;
          }
 
@@ -515,6 +670,27 @@ namespace backend
          outCourseId = taskId.substr(0, pos);
          outCourseWorkId = taskId.substr(pos + 2);
          return !outCourseId.empty() && !outCourseWorkId.empty();
+      }
+
+      std::string BuildClassroomTeacherSubmissionsUrl(const std::string& courseId, const std::string& courseWorkId)
+      {
+         if (courseId.empty() || courseWorkId.empty())
+         {
+            return "";
+         }
+
+         std::string encodedCourseId = Base64UrlEncode(courseId);
+         std::string encodedCourseWorkId = Base64UrlEncode(courseWorkId);
+
+         if (encodedCourseId.empty() || encodedCourseWorkId.empty())
+         {
+            return "";
+         }
+
+         return
+            "https://classroom.google.com/c/" + encodedCourseId +
+            "/a/" + encodedCourseWorkId +
+            "/submissions/by-status/and-sort-name/all/all";
       }
 
       std::string ExtractGithubUrl(const nlohmann::json& node)
@@ -1058,6 +1234,8 @@ namespace backend
                   SubmissionItem item;
                   item.id = submissionId;
                   item.taskId = taskId;
+                  item.studentUserId = userId;
+                  item.classroomStudentLink = submission.value("alternateLink", "");
                   item.repositoryUrl = ExtractGithubUrl(submission);
                   item.status = NormalizeSubmissionStatus(submission.value("state", ""), !item.repositoryUrl.empty());
                   item.late = submission.value("late", false);
@@ -1192,6 +1370,7 @@ namespace backend
 
          int sent = 0;
          int skipped = 0;
+         int failed = 0;
          nlohmann::json rows = nlohmann::json::array();
 
          for (auto* sub : deps.data.SubmissionsByTask(taskId))
@@ -1220,7 +1399,7 @@ namespace backend
                "/v1/courses/" + courseId +
                "/courseWork/" + courseWorkId +
                "/studentSubmissions/" + sub->id +
-               "?updateMask=draftGrade";
+               "?updateMask=draftGrade,assignedGrade";
 
             int gradeToSend = sub->grade;
 
@@ -1230,7 +1409,8 @@ namespace backend
             }
 
             nlohmann::json body = {
-               {"draftGrade", gradeToSend}
+               {"draftGrade", gradeToSend},
+               {"assignedGrade", gradeToSend}
             };
 
             if (ClassroomPatchJson(patchPath, session->accessToken, body, error))
@@ -1245,10 +1425,21 @@ namespace backend
             }
             else
             {
+               failed++;
                row["ok"] = false;
                row["message"] = error;
+
+               const std::string lowerError = ToLowerAscii(error);
+               if (lowerError.find("projectpermissiondenied") != std::string::npos ||
+                  lowerError.find("developer console project is not permitted") != std::string::npos)
+               {
+                  row["reason"] = "project_permission_denied";
+                  row["hint"] = "Це обмеження Google Classroom API. Оцінки можна PATCH-ити тільки для coursework, створеного цим самим OAuth Google Cloud проектом.";
+                  row["manualUrl"] = BuildClassroomTeacherSubmissionsUrl(courseId, courseWorkId);
+               }
             }
 #else
+            failed++;
             row["ok"] = false;
             row["message"] = "Підтримується тільки на Windows";
 #endif
@@ -1262,9 +1453,10 @@ namespace backend
          }
 
          JsonResponse(res, {
-            {"ok", true},
+            {"ok", targetSubmissionId.empty() ? (failed == 0) : (rows.size() == 1 && rows[0].value("ok", false))},
             {"sent", sent},
             {"skipped", skipped},
+            {"failed", failed},
             {"rows", rows}
          });
       });
@@ -1281,6 +1473,7 @@ namespace backend
 
          const std::string taskId = req.matches[1];
          std::string targetSubmissionId;
+         std::string taskTitle;
 
          if (!req.body.empty())
          {
@@ -1288,11 +1481,17 @@ namespace backend
             if (TryParseBody(req, body))
             {
                targetSubmissionId = body.value("submissionId", "");
+               taskTitle = body.value("taskTitle", "");
             }
          }
 
+         const std::string subject = taskTitle.empty()
+            ? "Результат перевірки роботи"
+            : ("Результат перевірки: " + taskTitle);
+
          nlohmann::json rows = nlohmann::json::array();
          int sent = 0;
+         int failed = 0;
 
          for (auto* sub : deps.data.SubmissionsByTask(taskId))
          {
@@ -1309,7 +1508,7 @@ namespace backend
                const bool mailed = GmailSendMessage(
                   session->accessToken,
                   sub->studentEmail,
-                  "Результат перевірки роботи",
+                  subject,
                   sub->feedback.empty() ? "Робота перевірена." : sub->feedback,
                   err);
 
@@ -1320,32 +1519,48 @@ namespace backend
                   result = {
                      {"submissionId", sub->id},
                      {"ok", true},
+                     {"delivery", "gmail"},
                      {"message", "Лист надіслано через Gmail API"}
                   };
                }
                else
                {
                   result = deps.finalService.Send(*sub);
+                  result["delivery"] = "outbox";
                   result["message"] = "Gmail не надіслав: " + err + ". Зроблено fallback у outbox.";
                   if (result.value("ok", false))
                   {
                      sent++;
+                  }
+                  else
+                  {
+                     failed++;
                   }
                }
             }
             else
             {
                result = deps.finalService.Send(*sub);
+               result["delivery"] = "outbox";
                if (result.value("ok", false))
                {
                   sent++;
                }
+               else
+               {
+                  failed++;
+               }
             }
 #else
             result = deps.finalService.Send(*sub);
+            result["delivery"] = "outbox";
             if (result.value("ok", false))
             {
                sent++;
+            }
+            else
+            {
+               failed++;
             }
 #endif
             rows.push_back(result);
@@ -1357,9 +1572,12 @@ namespace backend
             return;
          }
 
+         deps.data.PersistReviewState();
+
          JsonResponse(res, {
-            {"ok", true},
+            {"ok", targetSubmissionId.empty() ? (failed == 0) : (rows.size() == 1 && rows[0].value("ok", false))},
             {"sent", sent},
+            {"failed", failed},
             {"rows", rows}
          });
       });
@@ -1490,10 +1708,13 @@ namespace backend
          }
 
          const std::string submissionId = body.value("submissionId", "");
+         const std::string taskId = body.value("taskId", "");
          const std::string model = body.value("model", LoadConfiguredOllamaModel());
          const double temperature = body.value("temperature", 0.1);
 
-         SubmissionItem* sub = deps.data.SubmissionById(submissionId);
+         SubmissionItem* sub = taskId.empty()
+            ? deps.data.SubmissionById(submissionId)
+            : deps.data.SubmissionByTaskAndId(taskId, submissionId);
 
          if (sub == nullptr)
          {
@@ -1501,7 +1722,9 @@ namespace backend
             return;
          }
 
-         JsonResponse(res, deps.aiService.Analyze(*sub, model, temperature));
+         const nlohmann::json result = deps.aiService.Analyze(*sub, model, temperature);
+         deps.data.PersistReviewState();
+         JsonResponse(res, result);
       });
 
       server.Post("/api/review/plagiarism", [&](const httplib::Request& req, httplib::Response& res)
@@ -1523,7 +1746,11 @@ namespace backend
          }
 
          const std::string submissionId = body.value("submissionId", "");
-         SubmissionItem* sub = deps.data.SubmissionById(submissionId);
+         const std::string taskId = body.value("taskId", "");
+         const std::string taskTitle = body.value("taskTitle", "");
+         SubmissionItem* sub = taskId.empty()
+            ? deps.data.SubmissionById(submissionId)
+            : deps.data.SubmissionByTaskAndId(taskId, submissionId);
 
          if (sub == nullptr)
          {
@@ -1531,7 +1758,172 @@ namespace backend
             return;
          }
 
-         JsonResponse(res, deps.plagiarismService.Analyze(*sub));
+         const nlohmann::json result = deps.plagiarismService.Analyze(*sub);
+         deps.data.PersistReviewState();
+         JsonResponse(res, result);
+      });
+
+      server.Get("/api/review/plagiarism/sites", [&](const httplib::Request& req, httplib::Response& res)
+      {
+         const auto session = RequireAuth(req, deps.sessions);
+
+         if (!session.has_value())
+         {
+            JsonResponse(res, { {"ok", false}, {"message", "Не авторизовано"} }, 401);
+            return;
+         }
+
+         nlohmann::json out = deps.plagiarismService.GetSitesConfig();
+         out["ok"] = true;
+         JsonResponse(res, out);
+      });
+
+      server.Post("/api/review/plagiarism/sites", [&](const httplib::Request& req, httplib::Response& res)
+      {
+         const auto session = RequireAuth(req, deps.sessions);
+
+         if (!session.has_value())
+         {
+            JsonResponse(res, { {"ok", false}, {"message", "Не авторизовано"} }, 401);
+            return;
+         }
+
+         nlohmann::json body;
+
+         if (!TryParseBody(req, body))
+         {
+            JsonResponse(res, { {"ok", false}, {"message", "Невірний JSON"} }, 400);
+            return;
+         }
+
+         auto parseList = [](const nlohmann::json& node) -> std::vector<std::string>
+         {
+            std::vector<std::string> out;
+
+            if (node.is_array())
+            {
+               for (const auto& item : node)
+               {
+                  if (item.is_string())
+                  {
+                     out.push_back(item.get<std::string>());
+                  }
+               }
+
+               return out;
+            }
+
+            if (!node.is_string())
+            {
+               return out;
+            }
+
+            std::string token;
+            const std::string raw = node.get<std::string>();
+
+            auto flush = [&]()
+            {
+               if (!token.empty())
+               {
+                  out.push_back(token);
+                  token.clear();
+               }
+            };
+
+            for (char ch : raw)
+            {
+               if (ch == ',' || ch == ';' || ch == '\n' || ch == '\r' || ch == '\t')
+               {
+                  flush();
+               }
+               else
+               {
+                  token.push_back(ch);
+               }
+            }
+
+            flush();
+            return out;
+         };
+
+         const std::vector<std::string> whitelist = body.contains("whitelist") ? parseList(body["whitelist"]) : std::vector<std::string>{};
+         const std::vector<std::string> blacklist = body.contains("blacklist") ? parseList(body["blacklist"]) : std::vector<std::string>{};
+
+         std::string error;
+
+         if (!deps.plagiarismService.UpdateSitesConfig(whitelist, blacklist, error))
+         {
+            JsonResponse(res, { {"ok", false}, {"message", error.empty() ? "Не вдалося оновити список сайтів" : error} }, 400);
+            return;
+         }
+
+         nlohmann::json out = deps.plagiarismService.GetSitesConfig();
+         out["ok"] = true;
+         JsonResponse(res, out);
+      });
+
+      server.Post("/api/review/plagiarism/dataset/upload", [&](const httplib::Request& req, httplib::Response& res)
+      {
+         const auto session = RequireAuth(req, deps.sessions);
+
+         if (!session.has_value())
+         {
+            JsonResponse(res, { {"ok", false}, {"message", "Не авторизовано"} }, 401);
+            return;
+         }
+
+         nlohmann::json body;
+
+         if (!TryParseBody(req, body))
+         {
+            JsonResponse(res, { {"ok", false}, {"message", "Невірний JSON"} }, 400);
+            return;
+         }
+
+         std::string datasetText;
+
+         if (body.contains("datasetText") && body["datasetText"].is_string())
+         {
+            datasetText = body["datasetText"].get<std::string>();
+         }
+         else if (body.contains("rows") && body["rows"].is_array())
+         {
+            std::ostringstream assembled;
+            bool first = true;
+
+            for (const auto& row : body["rows"])
+            {
+               if (!row.is_string())
+               {
+                  continue;
+               }
+
+               if (!first)
+               {
+                  assembled << "\n";
+               }
+
+               assembled << row.get<std::string>();
+               first = false;
+            }
+
+            datasetText = assembled.str();
+         }
+
+         std::string error;
+         size_t rows = 0;
+
+         if (!deps.plagiarismService.ReplaceDataset(datasetText, error, rows))
+         {
+            JsonResponse(res, { {"ok", false}, {"message", error.empty() ? "Не вдалося завантажити dataset" : error} }, 400);
+            return;
+         }
+
+         JsonResponse(res, {
+            {"ok", true},
+            {"rows", rows},
+            {"message", "Dataset оновлено"}
+         });
       });
 
       server.Post("/api/review/finalize", [&](const httplib::Request& req, httplib::Response& res)
@@ -1553,11 +1945,14 @@ namespace backend
          }
 
          const std::string submissionId = body.value("submissionId", "");
+         const std::string taskId = body.value("taskId", "");
          int grade = body.value("grade", 2);
          const std::string feedback = body.value("feedback", "");
          const bool allowLateMaxGrade = body.value("allowLateMaxGrade", false);
 
-         SubmissionItem* sub = deps.data.SubmissionById(submissionId);
+         SubmissionItem* sub = taskId.empty()
+            ? deps.data.SubmissionById(submissionId)
+            : deps.data.SubmissionByTaskAndId(taskId, submissionId);
 
          if (sub == nullptr)
          {
@@ -1580,7 +1975,9 @@ namespace backend
             sub->detailedDescription = body["detailedDescription"].get<std::string>();
          }
 
-         JsonResponse(res, deps.finalService.Approve(*sub, grade, feedback));
+         const nlohmann::json result = deps.finalService.Approve(*sub, grade, feedback);
+         deps.data.PersistReviewState();
+         JsonResponse(res, result);
       });
 
       server.Post("/api/review/notes", [&](const httplib::Request& req, httplib::Response& res)
@@ -1602,7 +1999,11 @@ namespace backend
          }
 
          const std::string submissionId = body.value("submissionId", "");
-         SubmissionItem* sub = deps.data.SubmissionById(submissionId);
+         const std::string taskId = body.value("taskId", "");
+         const std::string taskTitle = body.value("taskTitle", "");
+         SubmissionItem* sub = taskId.empty()
+            ? deps.data.SubmissionById(submissionId)
+            : deps.data.SubmissionByTaskAndId(taskId, submissionId);
 
          if (sub == nullptr)
          {
@@ -1623,6 +2024,8 @@ namespace backend
          {
             sub->detailedDescription = body["detailedDescription"].get<std::string>();
          }
+
+         deps.data.PersistReviewState();
 
          JsonResponse(res, {
             {"ok", true},
@@ -1651,7 +2054,11 @@ namespace backend
          }
 
          const std::string submissionId = body.value("submissionId", "");
-         SubmissionItem* sub = deps.data.SubmissionById(submissionId);
+         const std::string taskId = body.value("taskId", "");
+         const std::string taskTitle = body.value("taskTitle", "");
+         SubmissionItem* sub = taskId.empty()
+            ? deps.data.SubmissionById(submissionId)
+            : deps.data.SubmissionByTaskAndId(taskId, submissionId);
 
          if (sub == nullptr)
          {
@@ -1662,17 +2069,22 @@ namespace backend
 #ifdef _WIN32
          if (!session->accessToken.empty() && !sub->studentEmail.empty())
          {
+            const std::string subject = taskTitle.empty()
+               ? "Результат перевірки роботи"
+               : ("Результат перевірки: " + taskTitle);
+
             std::string err;
             const bool mailed = GmailSendMessage(
                session->accessToken,
                sub->studentEmail,
-               "Результат перевірки роботи",
+               subject,
                (sub->teacherComment.empty() ? (sub->feedback.empty() ? "Робота перевірена." : sub->feedback) : sub->teacherComment),
                err);
 
             if (mailed)
             {
                sub->sent = true;
+               deps.data.PersistReviewState();
                JsonResponse(res, {
                   {"submissionId", sub->id},
                   {"ok", true},
@@ -1683,12 +2095,15 @@ namespace backend
 
             auto fallback = deps.finalService.Send(*sub);
             fallback["message"] = "Gmail не надіслав: " + err + ". Зроблено fallback у outbox.";
+            deps.data.PersistReviewState();
             JsonResponse(res, fallback);
             return;
          }
 #endif
 
-         JsonResponse(res, deps.finalService.Send(*sub));
+         const nlohmann::json result = deps.finalService.Send(*sub);
+         deps.data.PersistReviewState();
+         JsonResponse(res, result);
       });
    }
 }

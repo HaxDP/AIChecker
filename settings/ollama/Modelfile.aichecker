@@ -1,6 +1,7 @@
 FROM llama3.2:3b
 
-PARAMETER temperature 0.05
+PARAMETER temperature 0.2
 PARAMETER top_p 0.8
 PARAMETER repeat_penalty 1.15
 PARAMETER num_ctx 4096
+PARAMETER num_predict 800+

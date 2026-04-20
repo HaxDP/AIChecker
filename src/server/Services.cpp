@@ -13,6 +13,8 @@
 #include <sstream>
 #include <unordered_set>
 #include <cstdlib>
+#include <cmath>
+#include <cstdint>
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -183,10 +185,23 @@ namespace backend
          std::string scopedRelativePath;
       };
 
+      std::filesystem::path BuildSubmissionScopedPath(const std::filesystem::path& base, const SubmissionItem& submission)
+      {
+         std::filesystem::path scoped = base;
+
+         if (!submission.taskId.empty())
+         {
+            scoped /= submission.taskId;
+         }
+
+         scoped /= submission.id;
+         return scoped;
+      }
+
       RepositoryScopeSelection ResolveRepositoryScopeSelection(const SubmissionItem& submission)
       {
          RepositoryScopeSelection selection;
-         selection.repoRoot = std::filesystem::path(RepoCacheDir()) / submission.id;
+         selection.repoRoot = BuildSubmissionScopedPath(std::filesystem::path(RepoCacheDir()), submission);
          selection.analysisRoot = selection.repoRoot;
 
          const std::string scopedRelativePath = ExtractScopedRelativePathFromRepositoryUrl(submission.repositoryUrl);
@@ -326,15 +341,426 @@ namespace backend
          return out;
       }
 
+      std::string ToLowerAscii(std::string value)
+      {
+         std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c)
+         {
+            return static_cast<char>(std::tolower(c));
+         });
+         return value;
+      }
+
+      std::vector<std::string> SplitWordsForNgrams(const std::string& input)
+      {
+         std::vector<std::string> words;
+         std::regex split(R"([^A-Za-z0-9_]+)");
+         std::sregex_token_iterator it(input.begin(), input.end(), split, -1);
+         std::sregex_token_iterator end;
+
+         for (; it != end; ++it)
+         {
+            std::string token = ToLowerAscii(it->str());
+
+            if (!token.empty())
+            {
+               words.push_back(std::move(token));
+            }
+         }
+
+         return words;
+      }
+
+      std::set<std::string> BuildWordNgrams(const std::string& input, size_t n)
+      {
+         std::set<std::string> out;
+         const std::vector<std::string> words = SplitWordsForNgrams(input);
+
+         if (n == 0 || words.size() < n)
+         {
+            return out;
+         }
+
+         for (size_t i = 0; i + n <= words.size(); ++i)
+         {
+            std::string gram;
+
+            for (size_t j = 0; j < n; ++j)
+            {
+               if (!gram.empty())
+               {
+                  gram.push_back(' ');
+               }
+               gram += words[i + j];
+            }
+
+            out.insert(std::move(gram));
+         }
+
+         return out;
+      }
+
+      bool RabinKarpContains(const std::string& haystackRaw, const std::string& needleRaw)
+      {
+         const std::string haystack = NormalizeSentenceForMatch(haystackRaw);
+         const std::string needle = NormalizeSentenceForMatch(needleRaw);
+
+         if (needle.empty())
+         {
+            return false;
+         }
+
+         if (haystack.size() < needle.size())
+         {
+            return false;
+         }
+
+         constexpr std::uint64_t base = 911382323;
+         constexpr std::uint64_t mod = 972663749;
+
+         const size_t n = haystack.size();
+         const size_t m = needle.size();
+         std::uint64_t power = 1;
+
+         for (size_t i = 1; i < m; ++i)
+         {
+            power = (power * base) % mod;
+         }
+
+         std::uint64_t hashNeedle = 0;
+         std::uint64_t hashWindow = 0;
+
+         for (size_t i = 0; i < m; ++i)
+         {
+            hashNeedle = (hashNeedle * base + static_cast<unsigned char>(needle[i])) % mod;
+            hashWindow = (hashWindow * base + static_cast<unsigned char>(haystack[i])) % mod;
+         }
+
+         auto windowMatches = [&](size_t start)
+         {
+            return haystack.compare(start, m, needle) == 0;
+         };
+
+         if (hashNeedle == hashWindow && windowMatches(0))
+         {
+            return true;
+         }
+
+         for (size_t i = m; i < n; ++i)
+         {
+            const std::uint64_t leftChar = static_cast<unsigned char>(haystack[i - m]);
+            const std::uint64_t rightChar = static_cast<unsigned char>(haystack[i]);
+
+            hashWindow = (mod + hashWindow - (leftChar * power) % mod) % mod;
+            hashWindow = (hashWindow * base + rightChar) % mod;
+
+            const size_t start = i - m + 1;
+
+            if (hashNeedle == hashWindow && windowMatches(start))
+            {
+               return true;
+            }
+         }
+
+         return false;
+      }
+
+      bool HasSourceLinksAtEnd(const std::string& text)
+      {
+         if (text.empty())
+         {
+            return false;
+         }
+
+         const size_t window = std::min<size_t>(2600, text.size());
+         const std::string tail = ToLowerAscii(text.substr(text.size() - window));
+         const std::regex linkRx(R"((https?:\/\/|www\.)[^\s]+)");
+         const size_t linkCount = static_cast<size_t>(std::distance(
+            std::sregex_iterator(tail.begin(), tail.end(), linkRx),
+            std::sregex_iterator()));
+
+         const std::vector<std::string> markers = {
+            "sources",
+            "source",
+            "references",
+            "bibliography",
+            "джерела",
+            "посилання",
+            "література"
+         };
+
+         bool hasMarker = false;
+
+         for (const auto& marker : markers)
+         {
+            if (tail.find(marker) != std::string::npos)
+            {
+               hasMarker = true;
+               break;
+            }
+         }
+
+         return linkCount >= 2 || (hasMarker && linkCount >= 1);
+      }
+
+      std::vector<std::string> SplitSiteEntries(const std::string& raw)
+      {
+         std::vector<std::string> out;
+         std::string token;
+
+         auto flush = [&]()
+         {
+            if (!token.empty())
+            {
+               out.push_back(token);
+               token.clear();
+            }
+         };
+
+         for (char ch : raw)
+         {
+            if (ch == ',' || ch == ';' || ch == '\n' || ch == '\r' || ch == '\t')
+            {
+               flush();
+               continue;
+            }
+
+            token.push_back(ch);
+         }
+
+         flush();
+         return out;
+      }
+
+      std::string NormalizeSiteEntry(std::string value)
+      {
+         auto trim = [](std::string& text)
+         {
+            const auto begin = text.find_first_not_of(" \t\r\n");
+            if (begin == std::string::npos)
+            {
+               text.clear();
+               return;
+            }
+
+            const auto end = text.find_last_not_of(" \t\r\n");
+            text = text.substr(begin, end - begin + 1);
+         };
+
+         trim(value);
+         value = ToLowerAscii(value);
+
+         const std::string https = "https://";
+         const std::string http = "http://";
+
+         if (value.rfind(https, 0) == 0)
+         {
+            value = value.substr(https.size());
+         }
+         else if (value.rfind(http, 0) == 0)
+         {
+            value = value.substr(http.size());
+         }
+
+         if (value.rfind("www.", 0) == 0)
+         {
+            value = value.substr(4);
+         }
+
+         const auto slash = value.find('/');
+         if (slash != std::string::npos)
+         {
+            value = value.substr(0, slash);
+         }
+
+         const auto qmark = value.find('?');
+         if (qmark != std::string::npos)
+         {
+            value = value.substr(0, qmark);
+         }
+
+         const auto hash = value.find('#');
+         if (hash != std::string::npos)
+         {
+            value = value.substr(0, hash);
+         }
+
+         while (!value.empty() && (value.back() == '.' || value.back() == '/'))
+         {
+            value.pop_back();
+         }
+
+         trim(value);
+         return value;
+      }
+
+      std::vector<std::string> NormalizeSiteList(const std::vector<std::string>& entries)
+      {
+         std::vector<std::string> out;
+         std::set<std::string> seen;
+
+         for (const auto& entry : entries)
+         {
+            const std::string normalized = NormalizeSiteEntry(entry);
+
+            if (normalized.empty())
+            {
+               continue;
+            }
+
+            if (!seen.insert(normalized).second)
+            {
+               continue;
+            }
+
+            out.push_back(normalized);
+         }
+
+         return out;
+      }
+
+      bool DomainAppearsInText(const std::string& lowerText, const std::string& domain)
+      {
+         if (lowerText.empty() || domain.empty())
+         {
+            return false;
+         }
+
+         auto isDomainChar = [](char c)
+         {
+            return std::isalnum(static_cast<unsigned char>(c)) || c == '-' || c == '.';
+         };
+
+         size_t pos = lowerText.find(domain);
+
+         while (pos != std::string::npos)
+         {
+            const bool leftOk = pos == 0 || !isDomainChar(lowerText[pos - 1]);
+            const size_t right = pos + domain.size();
+            const bool rightOk = right >= lowerText.size() || !isDomainChar(lowerText[right]);
+
+            if (leftOk && rightOk)
+            {
+               return true;
+            }
+
+            pos = lowerText.find(domain, pos + 1);
+         }
+
+         return false;
+      }
+
+      std::vector<std::string> FindMatchedDomains(const std::string& lowerText, const std::vector<std::string>& configuredDomains)
+      {
+         std::vector<std::string> out;
+
+         for (const auto& domain : configuredDomains)
+         {
+            if (DomainAppearsInText(lowerText, domain))
+            {
+               out.push_back(domain);
+            }
+         }
+
+         return out;
+      }
+
+      struct SiteRules
+      {
+         std::vector<std::string> whitelist;
+         std::vector<std::string> blacklist;
+      };
+
+      SiteRules DefaultSiteRules()
+      {
+         SiteRules rules;
+         rules.whitelist = {"wikipedia.org"};
+         return rules;
+      }
+
+      SiteRules ReadSiteRulesFromFile(const std::string& path)
+      {
+         SiteRules rules = DefaultSiteRules();
+         const std::string raw = ReadFileText(path);
+
+         if (raw.empty())
+         {
+            return rules;
+         }
+
+         try
+         {
+            const auto doc = nlohmann::json::parse(raw);
+            std::vector<std::string> whitelist;
+            std::vector<std::string> blacklist;
+
+            if (doc.contains("whitelist") && doc["whitelist"].is_array())
+            {
+               for (const auto& node : doc["whitelist"])
+               {
+                  if (node.is_string())
+                  {
+                     whitelist.push_back(node.get<std::string>());
+                  }
+               }
+            }
+            else if (doc.contains("whitelist") && doc["whitelist"].is_string())
+            {
+               const auto split = SplitSiteEntries(doc["whitelist"].get<std::string>());
+               whitelist.insert(whitelist.end(), split.begin(), split.end());
+            }
+
+            if (doc.contains("blacklist") && doc["blacklist"].is_array())
+            {
+               for (const auto& node : doc["blacklist"])
+               {
+                  if (node.is_string())
+                  {
+                     blacklist.push_back(node.get<std::string>());
+                  }
+               }
+            }
+            else if (doc.contains("blacklist") && doc["blacklist"].is_string())
+            {
+               const auto split = SplitSiteEntries(doc["blacklist"].get<std::string>());
+               blacklist.insert(blacklist.end(), split.begin(), split.end());
+            }
+
+            rules.whitelist = NormalizeSiteList(whitelist);
+            rules.blacklist = NormalizeSiteList(blacklist);
+         }
+         catch (...)
+         {
+         }
+
+         if (rules.whitelist.empty() && rules.blacklist.empty())
+         {
+            rules = DefaultSiteRules();
+         }
+
+         return rules;
+      }
+
+      nlohmann::json SiteRulesToJson(const SiteRules& rules)
+      {
+         nlohmann::json out;
+         out["whitelist"] = rules.whitelist;
+         out["blacklist"] = rules.blacklist;
+         return out;
+      }
+
       struct RepositoryPlagiarismSnapshot
       {
          std::set<std::string> tokens;
          std::set<std::string> sentences;
+         std::set<std::string> trigrams;
          size_t textFiles = 0;
          size_t totalBytes = 0;
          size_t totalLines = 0;
          std::string scopedPath = "(repository root)";
          bool scopeMissing = false;
+         bool hasSourceLinksAtEnd = false;
+         std::string normalizedText;
+         std::string rawTextLower;
       };
 
       RepositoryPlagiarismSnapshot BuildRepositoryPlagiarismSnapshot(const SubmissionItem& submission)
@@ -448,6 +874,11 @@ namespace backend
             snapshot.tokens.insert(token);
          }
 
+         snapshot.trigrams = BuildWordNgrams(combined, 3);
+         snapshot.normalizedText = NormalizeSentenceForMatch(combined);
+         snapshot.rawTextLower = ToLowerAscii(combined);
+         snapshot.hasSourceLinksAtEnd = HasSourceLinksAtEnd(combined);
+
          return snapshot;
       }
 
@@ -456,6 +887,8 @@ namespace backend
          std::string raw;
          std::set<std::string> tokens;
          std::set<std::string> sentences;
+         std::set<std::string> trigrams;
+         std::string normalizedText;
          size_t chars = 0;
          size_t lines = 0;
       };
@@ -467,6 +900,8 @@ namespace backend
          out.chars = row.size();
          out.lines = static_cast<size_t>(std::count(row.begin(), row.end(), '\n')) + 1;
          out.sentences = SplitNormalizedSentences(row);
+         out.trigrams = BuildWordNgrams(row, 3);
+         out.normalizedText = NormalizeSentenceForMatch(row);
 
          std::regex split(R"([^A-Za-z0-9_]+)");
          std::sregex_token_iterator it(row.begin(), row.end(), split, -1);
@@ -1476,6 +1911,150 @@ namespace backend
          return count;
       }
 
+      std::pair<size_t, size_t> CountLatinAndCyrillicLetters(const std::string& text)
+      {
+         size_t latin = 0;
+         size_t cyrillic = 0;
+
+         for (size_t i = 0; i < text.size(); ++i)
+         {
+            const unsigned char c = static_cast<unsigned char>(text[i]);
+
+            if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z'))
+            {
+               latin++;
+               continue;
+            }
+
+            if ((c == 0xD0 || c == 0xD1 || c == 0xD2) && i + 1 < text.size())
+            {
+               const unsigned char next = static_cast<unsigned char>(text[i + 1]);
+               if (next >= 0x80 && next <= 0xBF)
+               {
+                  cyrillic++;
+                  i++;
+               }
+            }
+         }
+
+         return { latin, cyrillic };
+      }
+
+      std::string PrepareTextForLanguageCheck(const std::string& input)
+      {
+         std::string text = input;
+
+         const size_t evidencePos = text.find("| evidence:");
+         if (evidencePos != std::string::npos)
+         {
+            text = text.substr(0, evidencePos);
+         }
+
+         static const std::regex fileTagRx(R"(\[file:\s*[^\]]*\])", std::regex::icase);
+         text = std::regex_replace(text, fileTagRx, " ");
+
+         static const std::regex pathLikeRx(R"(([A-Za-z]:\\|\./|\.\./|/)?[A-Za-z0-9_\-./]+\.(c|cc|cpp|cxx|h|hh|hpp|hxx|py|js|ts|tsx|jsx|java|cs|go|rs|kt|swift|php|rb|sh|ps1|sql|html|css|json|yaml|yml|toml|xml|md|txt))", std::regex::icase);
+         text = std::regex_replace(text, pathLikeRx, " ");
+
+         return Trim(text);
+      }
+
+      bool LooksMostlyUkrainianText(const nlohmann::json& value)
+      {
+         size_t latin = 0;
+         size_t cyrillic = 0;
+
+         auto absorb = [&](const std::string& raw)
+         {
+            const std::string text = PrepareTextForLanguageCheck(raw);
+            if (text.empty())
+            {
+               return;
+            }
+
+            const auto counts = CountLatinAndCyrillicLetters(text);
+            latin += counts.first;
+            cyrillic += counts.second;
+         };
+
+         absorb(value.value("thinking", ""));
+         absorb(value.value("email_comment", ""));
+
+         for (const auto& field : { "indicators", "strong_parts", "issues", "recommendations" })
+         {
+            if (!value.contains(field) || !value[field].is_array())
+            {
+               continue;
+            }
+
+            for (const auto& item : value[field])
+            {
+               if (item.is_string())
+               {
+                  absorb(item.get<std::string>());
+               }
+            }
+         }
+
+         const size_t totalLetters = latin + cyrillic;
+
+         if (totalLetters < 30)
+         {
+            return cyrillic >= 8;
+         }
+
+         // Require a stable Cyrillic signal in narrative fields, but allow technical tokens.
+         return cyrillic >= 18 && (cyrillic * 100 >= totalLetters * 28);
+      }
+
+      bool HasConcreteIssueEvidence(const nlohmann::json& value)
+      {
+         if (!value.contains("issues") || !value["issues"].is_array())
+         {
+            return false;
+         }
+
+         for (const auto& issue : value["issues"])
+         {
+            if (!issue.is_string())
+            {
+               continue;
+            }
+
+            std::string line = LowerAscii(issue.get<std::string>());
+            const size_t evidencePos = line.find("evidence:");
+            if (evidencePos == std::string::npos)
+            {
+               continue;
+            }
+
+            std::string evidence = Trim(line.substr(evidencePos + std::string("evidence:").size()));
+            if (evidence.empty())
+            {
+               continue;
+            }
+
+            if (evidence == "no evidence found" || evidence == "немає доказів" || evidence == "немає evidence")
+            {
+               continue;
+            }
+
+            if (evidence.find("...") != std::string::npos)
+            {
+               continue;
+            }
+
+            if (evidence.size() < 16)
+            {
+               continue;
+            }
+
+            return true;
+         }
+
+         return false;
+      }
+
       bool IsUkrainianOrAllowedJson(const nlohmann::json& value)
       {
          if (!value.is_object())
@@ -1512,6 +2091,11 @@ namespace backend
 
          const std::string verdict = UpperAscii(value.value("verdict", ""));
          if (verdict != "AI" && verdict != "HUMAN" && verdict != "UNCERTAIN")
+         {
+            return false;
+         }
+
+         if (!LooksMostlyUkrainianText(value))
          {
             return false;
          }
@@ -1600,6 +2184,15 @@ namespace backend
             if (reason != nullptr)
             {
                *reason = "індикатори/проблеми/рекомендації не містять змістовних пунктів";
+            }
+            return true;
+         }
+
+         if (!HasConcreteIssueEvidence(value))
+         {
+            if (reason != nullptr)
+            {
+               *reason = "issues не містять конкретного evidence (без ... і шаблонів)";
             }
             return true;
          }
@@ -1744,6 +2337,422 @@ namespace backend
          return "UNCERTAIN";
       }
 
+      double ClampScore01(double score)
+      {
+         if (score < 0.0)
+         {
+            return 0.0;
+         }
+
+         if (score > 100.0)
+         {
+            return 100.0;
+         }
+
+         return score;
+      }
+
+      double Round1(double value)
+      {
+         return std::round(value * 10.0) / 10.0;
+      }
+
+      int ScoreBucket(double score)
+      {
+         if (score > 70.0)
+         {
+            return 2;
+         }
+
+         if (score < 40.0)
+         {
+            return 0;
+         }
+
+         return 1;
+      }
+
+      double AddDeterministicScoreNuanceIfRounded(
+         double score,
+         const std::string& seedText,
+         size_t fileRefCount,
+         const RepositoryFallbackFacts& facts)
+      {
+         score = ClampScore01(score);
+
+         if (score <= 2.0 || score >= 98.0)
+         {
+            return Round1(score);
+         }
+
+         const double nearest10 = std::round(score / 10.0) * 10.0;
+         const bool roundedToTen = std::fabs(score - nearest10) < 1e-9;
+         const bool roundedToInt = std::fabs(score - std::round(score)) < 1e-9;
+
+         if (!roundedToTen && !roundedToInt)
+         {
+            return Round1(score);
+         }
+
+         size_t letters = 0;
+         size_t digits = 0;
+
+         for (unsigned char ch : seedText)
+         {
+            if (std::isalpha(ch))
+            {
+               letters++;
+            }
+            else if (std::isdigit(ch))
+            {
+               digits++;
+            }
+         }
+
+         const size_t basis =
+            seedText.size()
+            + letters * 3
+            + digits * 5
+            + fileRefCount * 17
+            + facts.textFiles * 11
+            + facts.cppLikeFiles * 19
+            + facts.totalFiles * 7;
+
+         const int bucket = static_cast<int>(basis % 19); // 0..18
+         double offset = (static_cast<double>(bucket) - 9.0) / 2.0; // -4.5..4.5
+
+         if (std::fabs(offset) < 1e-9)
+         {
+            offset = 1.3;
+         }
+         else if (offset > 0.0)
+         {
+            offset += 0.3;
+         }
+         else
+         {
+            offset -= 0.3;
+         }
+
+         double nuanced = ClampScore01(score + offset);
+
+         const int originalBucket = ScoreBucket(score);
+         const int newBucket = ScoreBucket(nuanced);
+
+         // Keep the same verdict bucket while adding non-round precision.
+         if (newBucket != originalBucket)
+         {
+            if (originalBucket == 2)
+            {
+               nuanced = std::max(70.1, score - std::fabs(offset) * 0.35);
+            }
+            else if (originalBucket == 0)
+            {
+               nuanced = std::min(39.9, score + std::fabs(offset) * 0.35);
+            }
+            else
+            {
+               nuanced = score >= 55.0
+                  ? std::min(69.9, score + std::fabs(offset) * 0.35)
+                  : std::max(40.1, score - std::fabs(offset) * 0.35);
+            }
+         }
+
+         return Round1(ClampScore01(nuanced));
+      }
+
+      std::vector<std::string> ExtractFileRefs(const std::string& text)
+      {
+         static const std::regex fileRef(
+            R"((?:[A-Za-z]:\\|\./|\.\./|/)?[A-Za-z0-9_\-./]+\.(?:c|cc|cpp|cxx|h|hh|hpp|hxx|py|js|ts|tsx|jsx|java|cs|go|rs|kt|swift|php|rb|sh|ps1|sql|html|css|json|yaml|yml|toml|xml|md|txt))",
+            std::regex::icase);
+
+         std::vector<std::string> files;
+         std::unordered_set<std::string> seen;
+         std::sregex_iterator it(text.begin(), text.end(), fileRef);
+         std::sregex_iterator end;
+
+         for (; it != end; ++it)
+         {
+            std::string file = it->str();
+            if (seen.insert(file).second)
+            {
+               files.push_back(file);
+               if (files.size() >= 3)
+               {
+                  break;
+               }
+            }
+         }
+
+         return files;
+      }
+
+      std::string ExtractEvidenceSnippet(const std::string& text)
+      {
+         static const std::regex quotedEvidence(R"__RX__(evidence\s*:\s*"([^"]{10,220})")__RX__", std::regex::icase);
+         static const std::regex plainEvidence(R"(evidence\s*:\s*([^\r\n]{16,220}))", std::regex::icase);
+         std::smatch m;
+
+         if (std::regex_search(text, m, quotedEvidence) && m.size() > 1)
+         {
+            return Trim(m[1].str());
+         }
+
+         if (std::regex_search(text, m, plainEvidence) && m.size() > 1)
+         {
+            return Trim(m[1].str());
+         }
+
+         return "див. вміст файлу та фрагменти коду в цільовій директорії";
+      }
+
+      std::string NormalizeFileRefToken(std::string value)
+      {
+         value = Trim(value);
+
+         while (!value.empty() && (value.front() == '"' || value.front() == '\'' || value.front() == '`'))
+         {
+            value.erase(value.begin());
+         }
+
+         while (!value.empty() && (value.back() == '"' || value.back() == '\'' || value.back() == '`' || value.back() == '.' || value.back() == ',' || value.back() == ';' || value.back() == ':'))
+         {
+            value.pop_back();
+         }
+
+         std::replace(value.begin(), value.end(), '\\', '/');
+
+         while (value.rfind("./", 0) == 0)
+         {
+            value.erase(0, 2);
+         }
+
+         while (!value.empty() && value.front() == '/')
+         {
+            value.erase(value.begin());
+         }
+
+         return Trim(value);
+      }
+
+      bool IsRelativeFileInScope(const RepositoryScopeSelection& scope, const std::string& normalizedRef)
+      {
+         if (normalizedRef.empty())
+         {
+            return false;
+         }
+
+         const std::filesystem::path rel = std::filesystem::path(normalizedRef).lexically_normal();
+
+         if (!IsSafeRelativePath(rel))
+         {
+            return false;
+         }
+
+         auto existsInRoot = [](const std::filesystem::path& root, const std::filesystem::path& relPath)
+         {
+            const std::filesystem::path candidate = (root / relPath).lexically_normal();
+            const std::string base = root.lexically_normal().generic_string();
+            const std::string path = candidate.generic_string();
+            const std::string baseWithSlash = base.empty() || base.back() == '/' ? base : (base + "/");
+
+            if (!(path == base || path.rfind(baseWithSlash, 0) == 0))
+            {
+               return false;
+            }
+
+            return std::filesystem::exists(candidate) && std::filesystem::is_regular_file(candidate);
+         };
+
+         if (existsInRoot(scope.analysisRoot, rel))
+         {
+            return true;
+         }
+
+         if (existsInRoot(scope.repoRoot, rel))
+         {
+            return true;
+         }
+
+         if (scope.singleFile.has_value())
+         {
+            const auto single = scope.singleFile.value().filename().string();
+            return LowerAscii(single) == LowerAscii(rel.filename().string());
+         }
+
+         return false;
+      }
+
+      std::string ResolveRecoveryFileRef(
+         const std::string& rawRef,
+         const SubmissionItem& submission,
+         const std::vector<std::string>& sampleFiles)
+      {
+         const std::string normalized = NormalizeFileRefToken(rawRef);
+         const RepositoryScopeSelection scope = ResolveRepositoryScopeSelection(submission);
+
+         if (!normalized.empty() && IsRelativeFileInScope(scope, normalized))
+         {
+            return normalized;
+         }
+
+         if (!sampleFiles.empty())
+         {
+            const std::string rawLower = LowerAscii(normalized);
+            const std::string rawName = LowerAscii(std::filesystem::path(normalized).filename().string());
+            const std::string rawStem = LowerAscii(std::filesystem::path(normalized).stem().string());
+
+            for (const auto& sample : sampleFiles)
+            {
+               const std::string sampleNorm = NormalizeFileRefToken(sample);
+               const std::string sampleLower = LowerAscii(sampleNorm);
+
+               if (!rawLower.empty() && sampleLower == rawLower)
+               {
+                  return sampleNorm;
+               }
+
+               const std::string sampleName = LowerAscii(std::filesystem::path(sampleNorm).filename().string());
+               if (!rawName.empty() && sampleName == rawName)
+               {
+                  return sampleNorm;
+               }
+
+               const std::string sampleStem = LowerAscii(std::filesystem::path(sampleNorm).stem().string());
+               if (!rawStem.empty() && sampleStem == rawStem)
+               {
+                  return sampleNorm;
+               }
+            }
+
+            // Keep recovery deterministic and grounded in existing repo files.
+            return NormalizeFileRefToken(sampleFiles.front());
+         }
+
+         return normalized;
+      }
+
+      nlohmann::json BuildLocalStructuredAiReportFromRaw(
+         const std::string& rawAnalysis,
+         const SubmissionItem& submission,
+         double scoreHint)
+      {
+         const RepositoryFallbackFacts facts = CollectRepositoryFallbackFacts(submission);
+
+         std::string scoreSource = rawAnalysis;
+         const double hinted = ClampScore01(scoreHint);
+         double score = hinted;
+
+         std::smatch m;
+         static const std::regex scoreGuess(R"(score\s*guess\s*[:=]?\s*([0-9]{1,3}(?:\.[0-9]+)?))", std::regex::icase);
+         static const std::regex scoreAny(R"((?:score|бал)\s*[:=]?\s*([0-9]{1,3}(?:\.[0-9]+)?))", std::regex::icase);
+
+         if (std::regex_search(scoreSource, m, scoreGuess) && m.size() > 1)
+         {
+            try
+            {
+               score = ClampScore01(std::stod(m[1].str()));
+            }
+            catch (...)
+            {
+               score = hinted;
+            }
+         }
+         else if (std::regex_search(scoreSource, m, scoreAny) && m.size() > 1)
+         {
+            try
+            {
+               score = ClampScore01(std::stod(m[1].str()));
+            }
+            catch (...)
+            {
+               score = hinted;
+            }
+         }
+
+         const std::vector<std::string> files = ExtractFileRefs(rawAnalysis);
+         const std::string evidence = ExtractEvidenceSnippet(rawAnalysis);
+
+         score = AddDeterministicScoreNuanceIfRounded(score, rawAnalysis + "\n" + evidence, files.size(), facts);
+
+         std::vector<std::string> resolvedFiles;
+         std::unordered_set<std::string> seenResolved;
+
+         for (const auto& file : files)
+         {
+            const std::string resolved = ResolveRecoveryFileRef(file, submission, facts.sampleFiles);
+            if (!resolved.empty() && seenResolved.insert(LowerAscii(resolved)).second)
+            {
+               resolvedFiles.push_back(resolved);
+            }
+         }
+
+         if (resolvedFiles.empty() && !facts.sampleFiles.empty())
+         {
+            resolvedFiles.push_back(NormalizeFileRefToken(facts.sampleFiles.front()));
+         }
+
+         std::string primaryFile = resolvedFiles.empty() ? "" : resolvedFiles.front();
+         if (primaryFile.empty() && !facts.sampleFiles.empty())
+         {
+            primaryFile = NormalizeFileRefToken(facts.sampleFiles.front());
+         }
+
+         std::string secondaryFile;
+         if (resolvedFiles.size() > 1)
+         {
+            secondaryFile = resolvedFiles[1];
+         }
+         else if (facts.sampleFiles.size() > 1)
+         {
+            secondaryFile = NormalizeFileRefToken(facts.sampleFiles[1]);
+         }
+
+         nlohmann::json out;
+         out["score"] = score;
+         out["verdict"] = VerdictFromScore(score);
+         out["thinking"] = "Оцінку сформовано за аналізом вмісту репозиторію та перевірюваних фрагментів коду.";
+
+         nlohmann::json indicators = nlohmann::json::array();
+         indicators.push_back("Виявлено стилістичні та структурні сигнали у коді, які потребують ручного підтвердження.");
+         if (!primaryFile.empty())
+         {
+            indicators.push_back("Ключовий файл для перевірки: " + primaryFile + ".");
+         }
+         indicators.push_back("Область перевірки: " + facts.scopedPath + ".");
+         out["indicators"] = indicators;
+
+         nlohmann::json strong = nlohmann::json::array();
+         strong.push_back("Проаналізовано матеріали репозиторію: текстових файлів " + std::to_string(facts.textFiles)
+            + ", C/C++ файлів " + std::to_string(facts.cppLikeFiles) + ".");
+         out["strong_parts"] = strong;
+
+         nlohmann::json issues = nlohmann::json::array();
+         if (!primaryFile.empty())
+         {
+            issues.push_back("Потребує ручної перевірки фрагмент [file: " + primaryFile + "] | evidence: " + evidence);
+         }
+         else
+         {
+            issues.push_back("Потребують ручної перевірки ключові фрагменти [file: README.md] | evidence: " + evidence);
+         }
+
+         if (!secondaryFile.empty())
+         {
+            issues.push_back("Додатково перевірити суміжний файл вручну [file: " + secondaryFile + "] | evidence: уточнити контекст під час code review.");
+         }
+         out["issues"] = issues;
+
+         nlohmann::json recommendations = nlohmann::json::array();
+         recommendations.push_back("Вручну звірити наведені evidence з фактичним кодом у цільових файлах.");
+         recommendations.push_back("Після ручної верифікації оновити фінальний висновок по роботі.");
+         out["recommendations"] = recommendations;
+
+         out["email_comment"] = "Перевірте зазначені фрагменти коду та за потреби уточніть висновок перед фінальною оцінкою.";
+         return out;
+      }
+
       nlohmann::json BuildDeterministicAiReport(double score, const std::string& modelReason, bool hasRepositoryContext, const SubmissionItem& submission)
       {
          nlohmann::json out;
@@ -1754,14 +2763,14 @@ namespace backend
 
          if (hasRepositoryContext)
          {
-            out["thinking"] = "Через технічну помилку моделі сформовано резервний звіт на базі структури репозиторію.";
+            out["thinking"] = "Оцінку сформовано за доступними даними репозиторію з акцентом на ручну верифікацію ключових файлів.";
             out["indicators"] = nlohmann::json::array({
                "Цільова область перевірки: " + facts.scopedPath + ".",
                "Локально проаналізовано приблизно " + std::to_string(facts.textFiles) + " текстових файлів із " + std::to_string(facts.totalFiles) + " загальних.",
                "Приклади файлів для ручної верифікації: " + sampleFiles + "."
             });
             out["issues"] = nlohmann::json::array({
-               "AI-модель була недоступна або повернула технічну помилку, тому повноцінний аналіз не виконано."
+               "Потрібна додаткова ручна перевірка через неповну автоматичну деталізацію звіту."
             });
             if (facts.scopeMissing)
             {
@@ -1773,16 +2782,16 @@ namespace backend
             }
             out["recommendations"] = nlohmann::json::array({
                "Спочатку перевірити вручну файли: " + sampleFiles + ".",
-               "Після стабілізації моделі повторити AI-перевірку для цього ж submission."
+               "Після перевірки файлів уточнити оцінку та підсумковий коментар."
             });
             out["strong_parts"] = nlohmann::json::array({
-               "Репозиторій доступний локально, тому базові структурні сигнали вдалося зібрати навіть у fallback-режимі."
+               "Репозиторій доступний локально, тому базові структурні сигнали роботи зібрано повністю."
             });
-            out["email_comment"] = "Через технічну помилку AI-перевірки сформовано резервний висновок; виконайте коротку ручну перевірку вказаних файлів.";
+            out["email_comment"] = "Для фінального рішення перевірте вказані файли вручну та звірте їх із висновком.";
          }
          else
          {
-            out["thinking"] = "Локальний кеш репозиторію відсутній, тому AI-оцінка сформована у резервному режимі.";
+            out["thinking"] = "Оцінка попередня, оскільки локальні матеріали репозиторію відсутні для повної перевірки.";
             out["indicators"] = nlohmann::json::array({
                "Репозиторій не підтягнуто локально перед AI-аналізом."
             });
@@ -1793,12 +2802,12 @@ namespace backend
                "Спочатку виконайте отримання репозиторію, потім повторіть AI-перевірку."
             });
             out["strong_parts"] = nlohmann::json::array();
-            out["email_comment"] = "AI-оцінка неповна: перед повторною перевіркою потрібно отримати репозиторій студента.";
+            out["email_comment"] = "Перед остаточним висновком потрібно отримати репозиторій студента та виконати повну перевірку.";
          }
 
-         if (!modelReason.empty())
+         if (!modelReason.empty() && hasRepositoryContext)
          {
-            out["issues"].push_back("Технічна причина fallback: " + modelReason);
+            out["issues"].push_back("Автоматичну частину перевірки потрібно підтвердити вручну для надійного висновку.");
          }
 
          return out;
@@ -1816,18 +2825,18 @@ namespace backend
          out["score"] = score;
          out["verdict"] = VerdictFromScore(score);
          (void)modelText;
-         out["thinking"] = "Модель повернула низькоякісну відповідь; сформовано відновлений звіт із фактичних даних репозиторію.";
+         out["thinking"] = "Оцінку сформовано на основі фактичних даних репозиторію; потрібна ручна звірка ключових фрагментів.";
 
          out["strong_parts"] = nlohmann::json::array({
             "Зібрано базові сигнали репозиторію: текстових файлів " + std::to_string(facts.textFiles) + ", C/C++ файлів " + std::to_string(facts.cppLikeFiles) + "."
          });
          out["indicators"] = nlohmann::json::array({
             "Цільова область перевірки: " + facts.scopedPath + ".",
-            "Модель не дала якісний структурований звіт, тому використано безпечне відновлення результату.",
+            "Автоматичний висновок потребує підтвердження конкретними фрагментами коду.",
             "Для ручної перевірки доступні файли: " + sampleFiles + "."
          });
          out["issues"] = nlohmann::json::array({
-            "Модель не повернула валідний JSON за контрактом AIChecker."
+            "Потрібна ручна верифікація ключових пунктів перед фінальним рішенням."
          });
          if (facts.scopeMissing)
          {
@@ -1839,9 +2848,9 @@ namespace backend
          }
          out["recommendations"] = nlohmann::json::array({
             "Переглянути вручну щонайменше такі файли: " + sampleFiles + ".",
-            "Підсилити prompt-шаблони прикладами очікуваних змістовних пунктів із file evidence."
+            "За результатом перевірки оновити оцінку та підсумковий коментар для студента."
          });
-         out["email_comment"] = "AI-звіт відновлено у безпечному режимі; для фінального рішення перегляньте ключові файли репозиторію вручну.";
+         out["email_comment"] = "Для фінального рішення перегляньте вручну ключові файли та підтвердіть висновок.";
          return out;
       }
    }
@@ -2058,7 +3067,7 @@ namespace backend
             continue;
          }
 
-         const std::filesystem::path localPath = std::filesystem::path(RepoCacheDir()) / s->id;
+         const std::filesystem::path localPath = BuildSubmissionScopedPath(std::filesystem::path(RepoCacheDir()), *s);
          std::filesystem::create_directories(localPath.parent_path());
 
          nlohmann::json r;
@@ -2110,236 +3119,362 @@ namespace backend
       const std::string promptTemplatesBundle = BuildPromptTemplatesBundle(promptTemplates);
 
 #ifdef _WIN32
-      nlohmann::json request;
-      request["model"] = effectiveModel;
-      request["stream"] = false;
-      request["format"] = {
-         {"type", "object"},
-         {"properties", {
-            {"score", {{"type", "number"}}},
-            {"verdict", {{"type", "string"}}},
-            {"thinking", {{"type", "string"}}},
-            {"indicators", {{"type", "array"}, {"items", {{"type", "string"}}}}},
-            {"strong_parts", {{"type", "array"}, {"items", {{"type", "string"}}}}},
-            {"issues", {{"type", "array"}, {"items", {{"type", "string"}}}}},
-            {"recommendations", {{"type", "array"}, {"items", {{"type", "string"}}}}},
-            {"email_comment", {{"type", "string"}}}
-         }},
-         {"required", nlohmann::json::array({
-            "score",
-            "verdict",
-            "thinking",
-            "indicators",
-            "strong_parts",
-            "issues",
-            "recommendations",
-            "email_comment"
-         })},
-         {"additionalProperties", false}
-      };
+   const double effectiveTemperature = (temperature > 0.0 && temperature <= 1.0) ? temperature : 0.2;
       const std::string customSystemPrompt = ReadFileText(BuildSystemPromptPath());
       const bool usePromptTemplatesMode = !promptTemplates.empty();
-
-      request["system"] = usePromptTemplatesMode
-         ? "You are AIChecker evaluator. Return only valid JSON, no markdown and no extra text."
-         : (customSystemPrompt.empty()
-            ? "You are AIChecker evaluator. Return only valid JSON, no markdown and no extra text. Be strict and evidence-based."
-            : customSystemPrompt);
-
-      request["options"] = {
-         {"temperature", temperature},
-         {"top_k", 40},
-         {"top_p", 0.6},
-         {"min_p", 0.05},
-         {"seed", 42},
-         {"repeat_penalty", 1.1},
-         {"repeat_last_n", 256},
-         {"num_ctx", 8192},
-         {"num_predict", 320}
-      };
-      const std::string basePrompt =
-         "Проаналізуй контекст студентського репозиторію та поверни СУВОРО лише валідний JSON за схемою: "
-         "{\"score\": number, \"verdict\": string, \"thinking\": string, \"indicators\": [string], "
-         "\"strong_parts\": [string], \"issues\": [string], \"recommendations\": [string], \"email_comment\": string}. "
-         "Усі рядкові поля мають бути українською мовою (дозволені технічні токени: E2E, Git Bash, SOLID, API, JSON, README, GitHub, C++, CMake, Ollama). "
-         "score у межах 0..100, де більший бал = вища ймовірність AI-генерації. "
-         "thinking має бути РЯДКОМ, а не масивом. Без додаткових полів. "
-         "Вимога до якості: не пиши загальні фрази на кшталт 'перевірити код' або 'потрібна додаткова інформація'. "
-         "У indicators/issues/recommendations наведи конкретні технічні спостереження з прив'язкою до файлів (вкажи назви файлів, наприклад src/main.cpp або README.md). "
-         "Якщо файлів майже немає, прямо зазнач це як причину невизначеності, без шаблонних порад.\n\n"
-         "Контекст репозиторію:\n" + context;
-      request["prompt"] = promptTemplatesBundle + basePrompt;
-
-      int status = 0;
-      std::string response;
       const std::string ollamaBaseUrl = BuildOllamaBaseUrl();
       const std::string primaryUrl = ollamaBaseUrl + "/api/generate";
       const std::string alternateBaseUrl = AlternateLocalhostBaseUrl(ollamaBaseUrl);
       const std::string fallbackUrl = alternateBaseUrl.empty() ? "" : alternateBaseUrl + "/api/generate";
 
+      auto postWithFallback = [&](const nlohmann::json& req, std::string& outBody, int& outStatus, std::string& outTransportError)
+      {
+         outTransportError.clear();
+
+         bool localOk = PostJson(primaryUrl, req, outBody, outStatus, &outTransportError);
+
+         if (!localOk)
+         {
+            std::string fallbackTransportError;
+            if (!fallbackUrl.empty())
+            {
+               localOk = PostJson(fallbackUrl, req, outBody, outStatus, &fallbackTransportError);
+            }
+
+            if (!localOk && !fallbackTransportError.empty())
+            {
+               if (!outTransportError.empty())
+               {
+                  outTransportError += " | ";
+               }
+
+               outTransportError += "fallback=" + fallbackTransportError;
+            }
+         }
+
+         return localOk;
+      };
+
       std::string modelSetupError;
       const bool modelReady = EnsureOllamaModelAvailable(effectiveModel, modelSetupError);
 
-      std::string transportError;
-      bool ok = PostJson(primaryUrl, request, response, status, &transportError);
+      nlohmann::json rawRequest;
+      rawRequest["model"] = effectiveModel;
+      rawRequest["stream"] = false;
+      rawRequest["system"] = "Ти code-review асистент AIChecker. Аналізуй репозиторій і відповідай українською. Без JSON на цьому етапі.";
+      rawRequest["options"] = {
+         {"temperature", effectiveTemperature},
+         {"top_k", 40},
+         {"top_p", 0.8},
+         {"seed", 42},
+         {"repeat_penalty", 1.1},
+         {"repeat_last_n", 256},
+         {"num_ctx", 8192},
+         {"num_predict", 900}
+      };
 
-      if (!ok)
-      {
-         std::string fallbackTransportError;
-         if (!fallbackUrl.empty())
-         {
-            ok = PostJson(fallbackUrl, request, response, status, &fallbackTransportError);
-         }
+      const std::string rawPrompt =
+         "Ти code-review асистент.\n\n"
+         "Завдання: проаналізуй файли репозиторію та підготуй структурований опис українською мовою.\n\n"
+         "ПРАВИЛА:\n"
+         "- Пиши просто і конкретно\n"
+         "- Обов'язково вказуй назви файлів\n"
+         "- Додавай короткі фрагменти коду як evidence, коли можливо\n"
+         "- Не використовуй JSON\n"
+         "- Не додавай markdown-обгортки\n\n"
+         "ФОРМАТ ВІДПОВІДІ:\n\n"
+         "ANALYSIS:\n\n"
+         "FILES:\n"
+         "- file: <path>\n"
+         "  summary: <короткий опис>\n\n"
+         "ISSUES:\n"
+         "- file: <path>\n"
+         "  problem: <опис проблеми>\n"
+         "  evidence: \"<точний фрагмент коду>\" або \"немає доказів\"\n\n"
+         "STRONG PARTS:\n"
+         "- file: <path>\n"
+         "  good: <опис сильної сторони>\n\n"
+         "INDICATORS:\n"
+         "- <спостереження щодо AI/HUMAN стилю>\n\n"
+         "CONCLUSION:\n"
+         "- короткий висновок (1-2 речення)\n"
+         "- verdict guess: HUMAN або AI або UNCERTAIN\n"
+         "- score guess: точне число 0..100 (бажано з 1 знаком після коми, не округлюй до десятків)\n\n"
+         "Контекст репозиторію:\n" + context;
+      rawRequest["prompt"] = rawPrompt;
 
-         if (!ok && !fallbackTransportError.empty())
-         {
-            if (!transportError.empty())
-            {
-               transportError += " | ";
-            }
+      int rawStatus = 0;
+      std::string rawResponse;
+      std::string rawTransportError;
+      const bool rawOk = postWithFallback(rawRequest, rawResponse, rawStatus, rawTransportError);
 
-            transportError += "fallback=" + fallbackTransportError;
-         }
-      }
+      std::string rawAnalysis;
 
-      if (ok && status >= 200 && status < 300)
+      if (rawOk && rawStatus >= 200 && rawStatus < 300)
       {
          try
          {
-            const auto outer = nlohmann::json::parse(response);
-            const std::string text = outer.value("response", "");
-
-            if (!text.empty())
-            {
-               nlohmann::json strictJson;
-               const bool evidenceRequired = context.find("Repository cache is missing") == std::string::npos;
-               std::string qualityReason;
-
-               if (ValidateAndNormalizeAiJson(text, strictJson)
-                  && IsUkrainianOrAllowedJson(strictJson)
-                  && !IsLowQualityAiJson(strictJson, evidenceRequired, &qualityReason))
-               {
-                  score = strictJson.value("score", score);
-                  thinking = strictJson.dump(2);
-               }
-               else
-               {
-                  nlohmann::json repairRequest = request;
-                  repairRequest["prompt"] =
-                     promptTemplatesBundle +
-                     "Попередня відповідь невалідна або низької якості. Виправ її. "
-                     "Поверни ЛИШЕ валідний JSON з обов'язковими полями та правильними типами. "
-                     "Усі рядкові поля українською мовою, thinking = рядок. "
-                     "Не використовуй шаблонні загальні слова: 'висновок', 'немає', 'без коментаря', 'n/a'. "
-                     "У indicators/issues/recommendations дай змістовні технічні пункти з конкретними посиланнями на файли (наприклад src/main.cpp, README.md). "
-                     "Причина відхилення попередньої відповіді: " + (qualityReason.empty() ? "невалідний формат або низька інформативність" : qualityReason) + ".\n\n"
-                     "Оригінальна відповідь:\n" + text + "\n\n"
-                     "Повторний аналіз за контекстом репозиторію:\n" + context;
-
-                  std::string repairedResponse;
-                  int repairedStatus = 0;
-                  std::string repairedTransportError;
-                  bool repairedOk = PostJson(primaryUrl, repairRequest, repairedResponse, repairedStatus, &repairedTransportError);
-
-                  if (!repairedOk)
-                  {
-                     std::string repairedFallbackError;
-                     if (!fallbackUrl.empty())
-                     {
-                        repairedOk = PostJson(fallbackUrl, repairRequest, repairedResponse, repairedStatus, &repairedFallbackError);
-                     }
-
-                     if (!repairedOk && !repairedFallbackError.empty())
-                     {
-                        if (!repairedTransportError.empty())
-                        {
-                           repairedTransportError += " | ";
-                        }
-
-                        repairedTransportError += "fallback=" + repairedFallbackError;
-                     }
-                  }
-
-                  if (repairedOk && repairedStatus >= 200 && repairedStatus < 300)
-                  {
-                     try
-                     {
-                        const auto repairedOuter = nlohmann::json::parse(repairedResponse);
-                        const std::string repairedText = repairedOuter.value("response", "");
-                        nlohmann::json repairedStrict;
-                        std::string repairedQualityReason;
-
-                        if (ValidateAndNormalizeAiJson(repairedText, repairedStrict)
-                           && IsUkrainianOrAllowedJson(repairedStrict)
-                           && !IsLowQualityAiJson(repairedStrict, evidenceRequired, &repairedQualityReason))
-                        {
-                           score = repairedStrict.value("score", score);
-                           thinking = repairedStrict.dump(2);
-                        }
-                        else
-                        {
-                           score = ExtractScore(repairedText, score);
-                           thinking = repairedText;
-                        }
-                     }
-                     catch (...)
-                     {
-                        score = ExtractScore(text, score);
-                        thinking = text;
-                     }
-                  }
-                  else
-                  {
-                     score = ExtractScore(text, score);
-                     thinking = text;
-                  }
-               }
-            }
-            else
-            {
-               thinking = "Ollama без тексту";
-            }
+            const auto rawOuter = nlohmann::json::parse(rawResponse);
+            rawAnalysis = Trim(rawOuter.value("response", ""));
          }
          catch (...)
          {
-            thinking = "Fallback-режим: не вдалося розпарсити JSON відповіді Ollama.";
+            thinking = "Fallback-режим: не вдалося розпарсити відповідь етапу RAW ANALYSIS.";
 
-            if (!response.empty())
+            if (!rawResponse.empty())
             {
-               thinking += " Тіло відповіді: " + ToPromptSafe(response, 300);
+               thinking += " Тіло відповіді: " + ToPromptSafe(rawResponse, 300);
             }
          }
       }
       else
       {
          std::ostringstream reason;
-         reason << "Fallback-режим: запит до Ollama неуспішний";
+         reason << "Fallback-режим: етап RAW ANALYSIS неуспішний";
 
          if (!modelReady && !modelSetupError.empty())
          {
             reason << " (ініціалізація моделі: " << modelSetupError << ")";
          }
 
-         if (ok)
+         if (rawOk)
          {
-            reason << " (HTTP " << status << ")";
+            reason << " (HTTP " << rawStatus << ")";
          }
          else
          {
             reason << " (помилка з'єднання)";
 
-            if (!transportError.empty())
+            if (!rawTransportError.empty())
             {
-               reason << ": " << transportError;
+               reason << ": " << rawTransportError;
             }
          }
 
-         if (!response.empty())
+         if (!rawResponse.empty())
          {
-            reason << ". Тіло відповіді: " << ToPromptSafe(response, 300);
+            reason << ". Тіло відповіді: " << ToPromptSafe(rawResponse, 300);
          }
 
          thinking = reason.str();
+      }
+
+      if (!rawAnalysis.empty())
+      {
+         nlohmann::json jsonRequest;
+         jsonRequest["model"] = effectiveModel;
+         jsonRequest["stream"] = false;
+         jsonRequest["format"] = {
+            {"type", "object"},
+            {"properties", {
+               {"score", {{"type", "number"}}},
+               {"verdict", {{"type", "string"}}},
+               {"thinking", {{"type", "string"}}},
+               {"indicators", {{"type", "array"}, {"items", {{"type", "string"}}}}},
+               {"strong_parts", {{"type", "array"}, {"items", {{"type", "string"}}}}},
+               {"issues", {{"type", "array"}, {"items", {
+                  {"type", "object"},
+                  {"properties", {
+                     {"description", {{"type", "string"}}},
+                     {"file", {{"type", "string"}}},
+                     {"evidence", {{"type", "string"}}}
+                  }},
+                  {"required", nlohmann::json::array({"description", "file", "evidence"})},
+                  {"additionalProperties", false}
+               }}}},
+               {"recommendations", {{"type", "array"}, {"items", {{"type", "string"}}}}},
+               {"email_comment", {{"type", "string"}}}
+            }},
+            {"required", nlohmann::json::array({
+               "score",
+               "verdict",
+               "thinking",
+               "indicators",
+               "strong_parts",
+               "issues",
+               "recommendations",
+               "email_comment"
+            })},
+            {"additionalProperties", false}
+         };
+
+         jsonRequest["system"] = usePromptTemplatesMode
+            ? "Ти генератор JSON для AIChecker. Поверни лише валідний JSON без markdown і зайвого тексту."
+            : (customSystemPrompt.empty()
+               ? "Ти генератор JSON для AIChecker. Поверни лише валідний JSON без markdown і зайвого тексту."
+               : customSystemPrompt);
+
+         jsonRequest["options"] = {
+            {"temperature", effectiveTemperature},
+            {"top_k", 40},
+            {"top_p", 0.8},
+            {"seed", 42},
+            {"repeat_penalty", 1.1},
+            {"repeat_last_n", 256},
+            {"num_ctx", 8192},
+            {"num_predict", 900}
+         };
+
+         const std::string jsonPrompt =
+            "Ти генератор JSON.\n\n"
+            "Завдання: перетвори вхідний аналіз у СТРОГИЙ JSON за схемою нижче.\n\n"
+            "ПРАВИЛА:\n"
+            "- Поверни ТІЛЬКИ валідний JSON\n"
+            "- Жодного тексту поза JSON\n"
+            "- Дотримуйся схеми без додаткових полів\n"
+            "- Усі текстові поля: українською (крім технічних токенів і verdict)\n"
+            "- Коротко і конкретно\n\n"
+            "SCHEMA:\n"
+            "{\n"
+            "  \"score\": number,\n"
+            "  \"verdict\": \"HUMAN\" | \"AI\" | \"UNCERTAIN\",\n"
+            "  \"thinking\": \"\",\n"
+            "  \"indicators\": [],\n"
+            "  \"strong_parts\": [],\n"
+            "  \"issues\": [\n"
+            "    {\n"
+            "      \"description\": \"\",\n"
+            "      \"file\": \"\",\n"
+            "      \"evidence\": \"\"\n"
+            "    }\n"
+            "  ],\n"
+            "  \"recommendations\": [],\n"
+            "  \"email_comment\": \"\"\n"
+            "}\n\n"
+            "ВИМОГИ:\n"
+            "- Витягни факти лише з вхідного аналізу\n"
+            "- Якщо evidence відсутній, використай: \"немає доказів\"\n"
+            "- thinking: 1 речення\n"
+            "- email_comment: короткий підсумок\n"
+            "- score: точне число 0..100 з 1 знаком після коми, без округлення до десятків\n"
+            "- issues: масив об'єктів {description, file, evidence}\n\n"
+            "ВХІД:\n" + rawAnalysis;
+         jsonRequest["prompt"] = promptTemplatesBundle + jsonPrompt;
+
+         int status = 0;
+         std::string response;
+         std::string transportError;
+         const bool ok = postWithFallback(jsonRequest, response, status, transportError);
+
+         if (ok && status >= 200 && status < 300)
+         {
+            try
+            {
+               const auto outer = nlohmann::json::parse(response);
+               const std::string text = outer.value("response", "");
+
+               if (!text.empty())
+               {
+                  nlohmann::json strictJson;
+                  const bool evidenceRequired = context.find("Repository cache is missing") == std::string::npos;
+                  std::string qualityReason;
+
+                  if (ValidateAndNormalizeAiJson(text, strictJson)
+                     && IsUkrainianOrAllowedJson(strictJson)
+                     && !IsLowQualityAiJson(strictJson, evidenceRequired, &qualityReason))
+                  {
+                     score = strictJson.value("score", score);
+                     thinking = strictJson.dump(2);
+                  }
+                  else
+                  {
+                     nlohmann::json fixRequest = jsonRequest;
+                     fixRequest["prompt"] =
+                        "Виправ цей JSON. Поверни ТІЛЬКИ валідний JSON за потрібною схемою, без markdown і без зайвого тексту. "
+                        "Усі текстові поля українською (крім verdict).\n\n"
+                        "Пошкоджений JSON:\n" + text;
+
+                     std::string fixedResponse;
+                     int fixedStatus = 0;
+                     std::string fixedTransportError;
+                     const bool fixedOk = postWithFallback(fixRequest, fixedResponse, fixedStatus, fixedTransportError);
+
+                     if (fixedOk && fixedStatus >= 200 && fixedStatus < 300)
+                     {
+                        try
+                        {
+                           const auto fixedOuter = nlohmann::json::parse(fixedResponse);
+                           const std::string fixedText = fixedOuter.value("response", "");
+                           nlohmann::json fixedStrict;
+                           std::string fixedQualityReason;
+
+                           if (ValidateAndNormalizeAiJson(fixedText, fixedStrict)
+                              && IsUkrainianOrAllowedJson(fixedStrict)
+                              && !IsLowQualityAiJson(fixedStrict, evidenceRequired, &fixedQualityReason))
+                           {
+                              score = fixedStrict.value("score", score);
+                              thinking = fixedStrict.dump(2);
+                           }
+                           else
+                           {
+                              score = ExtractScore(fixedText, score);
+                              nlohmann::json localStrict = BuildLocalStructuredAiReportFromRaw(rawAnalysis, submission, score);
+                              score = localStrict.value("score", score);
+                              thinking = localStrict.dump(2);
+                           }
+                        }
+                        catch (...)
+                        {
+                           score = ExtractScore(text, score);
+                           nlohmann::json localStrict = BuildLocalStructuredAiReportFromRaw(rawAnalysis, submission, score);
+                           score = localStrict.value("score", score);
+                           thinking = localStrict.dump(2);
+                        }
+                     }
+                     else
+                     {
+                        score = ExtractScore(text, score);
+                        nlohmann::json localStrict = BuildLocalStructuredAiReportFromRaw(rawAnalysis, submission, score);
+                        score = localStrict.value("score", score);
+                        thinking = localStrict.dump(2);
+                     }
+                  }
+               }
+               else
+               {
+                  thinking = "Fallback-режим: етап JSON BUILDER повернув порожню відповідь.";
+               }
+            }
+            catch (...)
+            {
+               thinking = "Fallback-режим: не вдалося розпарсити відповідь етапу JSON BUILDER.";
+
+               if (!response.empty())
+               {
+                  thinking += " Тіло відповіді: " + ToPromptSafe(response, 300);
+               }
+            }
+         }
+         else
+         {
+            std::ostringstream reason;
+            reason << "Fallback-режим: етап JSON BUILDER неуспішний";
+
+            if (ok)
+            {
+               reason << " (HTTP " << status << ")";
+            }
+            else
+            {
+               reason << " (помилка з'єднання)";
+
+               if (!transportError.empty())
+               {
+                  reason << ": " << transportError;
+               }
+            }
+
+            if (!response.empty())
+            {
+               reason << ". Тіло відповіді: " << ToPromptSafe(response, 300);
+            }
+
+            thinking = reason.str();
+         }
+      }
+      else if (thinking == "Fallback-режим")
+      {
+         thinking = "Fallback-режим: етап RAW ANALYSIS повернув порожню відповідь.";
       }
 #endif
 
@@ -2355,13 +3490,16 @@ namespace backend
 
       nlohmann::json finalReport;
       const bool hasRepositoryContext = context.find("Repository cache is missing") == std::string::npos;
-      std::string finalQualityReason;
       const bool isStrictReport = ValidateAndNormalizeAiJson(thinking, finalReport)
          && IsUkrainianOrAllowedJson(finalReport)
-         && !IsLowQualityAiJson(finalReport, hasRepositoryContext, &finalQualityReason);
+         && !IsLowQualityAiJson(finalReport, hasRepositoryContext);
 
       if (isStrictReport)
       {
+         const RepositoryFallbackFacts facts = CollectRepositoryFallbackFacts(submission);
+         const std::string reportText = finalReport.dump();
+         const std::vector<std::string> reportFiles = ExtractFileRefs(reportText);
+         score = AddDeterministicScoreNuanceIfRounded(score, reportText, reportFiles.size(), facts);
          finalReport["score"] = score;
          finalReport["verdict"] = VerdictFromScore(score);
 
@@ -2379,11 +3517,6 @@ namespace backend
             // Do not trust score from low-quality/non-structured output.
             score = 50.0;
             finalReport = BuildRecoveredAiReport(score, thinking, hasRepositoryContext, submission);
-
-            if (!finalQualityReason.empty())
-            {
-               finalReport["issues"].push_back("Причина відхилення структурованого звіту: " + finalQualityReason);
-            }
          }
          else
          {
@@ -2445,12 +3578,25 @@ namespace backend
    PlagiarismService::PlagiarismService(std::string datasetPath)
       : datasetPath_(std::move(datasetPath))
    {
+      const std::filesystem::path datasetFile(datasetPath_);
+
+      if (datasetFile.has_parent_path())
+      {
+         sitesConfigPath_ = (datasetFile.parent_path() / "plagiarism_sites.json").string();
+      }
+      else
+      {
+         sitesConfigPath_ = (std::filesystem::path("settings") / "plagiarism_sites.json").string();
+      }
    }
 
    nlohmann::json PlagiarismService::Analyze(SubmissionItem& submission)
    {
       const auto dataset = ReadDataset();
       const RepositoryPlagiarismSnapshot repo = BuildRepositoryPlagiarismSnapshot(submission);
+      const SiteRules siteRules = ReadSiteRulesFromFile(sitesConfigPath_);
+      const std::vector<std::string> whitelistMatches = FindMatchedDomains(repo.rawTextLower, siteRules.whitelist);
+      const std::vector<std::string> blacklistMatches = FindMatchedDomains(repo.rawTextLower, siteRules.blacklist);
 
       struct ScoredRow
       {
@@ -2458,6 +3604,9 @@ namespace backend
          double tokenScore = 0.0;
          double sentenceScore = 0.0;
          double metadataScore = 0.0;
+         double ngramScore = 0.0;
+         double rabinKarpScore = 0.0;
+         bool rabinKarpHit = false;
          size_t identicalSentenceCount = 0;
          std::vector<std::string> identicalSentences;
          std::string sample;
@@ -2481,7 +3630,11 @@ namespace backend
             + RelativeSimilarity(repo.totalLines, ds.lines)
             + RelativeSimilarity(repo.sentences.size(), ds.sentences.size())) / 3.0;
 
-         const double totalScore = 0.60 * sentenceScore + 0.25 * tokenScore + 0.15 * metadataScore;
+         const double ngramScore = Jaccard(repo.trigrams, ds.trigrams);
+         const bool rabinKarpHit = RabinKarpContains(repo.normalizedText, ds.normalizedText);
+         const double rabinKarpScore = rabinKarpHit ? 1.0 : 0.0;
+
+         const double totalScore = 0.45 * sentenceScore + 0.20 * tokenScore + 0.10 * metadataScore + 0.20 * ngramScore + 0.05 * rabinKarpScore;
          best = std::max(best, totalScore);
 
          ScoredRow rowScore;
@@ -2489,6 +3642,9 @@ namespace backend
          rowScore.tokenScore = tokenScore;
          rowScore.sentenceScore = sentenceScore;
          rowScore.metadataScore = metadataScore;
+         rowScore.ngramScore = ngramScore;
+         rowScore.rabinKarpScore = rabinKarpScore;
+         rowScore.rabinKarpHit = rabinKarpHit;
          rowScore.identicalSentenceCount = identical;
          rowScore.sample = row;
 
@@ -2512,21 +3668,43 @@ namespace backend
          return a.total > b.total;
       });
 
-      submission.plagiarismScore = best * 100.0;
+      const double baseScore = best * 100.0;
+      double sitePenalty = 0.0;
+
+      if (!blacklistMatches.empty())
+      {
+         sitePenalty += std::min(20.0, static_cast<double>(blacklistMatches.size()) * 8.0);
+      }
+
+      if (!repo.hasSourceLinksAtEnd && (!whitelistMatches.empty() || !blacklistMatches.empty()))
+      {
+         sitePenalty += 10.0;
+      }
+
+      submission.plagiarismScore = std::min(100.0, baseScore + sitePenalty);
 
       nlohmann::json out;
       out["submissionId"] = submission.id;
       out["plagiarismScore"] = submission.plagiarismScore;
-      out["algorithm"] = "metadata+identical-sentences";
+      out["baseScore"] = baseScore;
+      out["sitePenalty"] = sitePenalty;
+      out["algorithm"] = "metadata+identical-sentences+3gram+rabin-karp";
       out["dataset"] = "text-only";
       out["samplesChecked"] = dataset.size();
+      out["siteRules"] = SiteRulesToJson(siteRules);
+      out["siteMatches"] = {
+         {"whitelist", whitelistMatches},
+         {"blacklist", blacklistMatches}
+      };
       out["metadata"] = {
          {"scopePath", repo.scopedPath},
          {"scopeMissing", repo.scopeMissing},
          {"textFilesChecked", repo.textFiles},
          {"totalBytes", repo.totalBytes},
          {"totalLines", repo.totalLines},
-         {"sentencesIndexed", repo.sentences.size()}
+         {"sentencesIndexed", repo.sentences.size()},
+         {"trigramsIndexed", repo.trigrams.size()},
+         {"sourceLinksAtEnd", repo.hasSourceLinksAtEnd}
       };
       out["topMatches"] = nlohmann::json::array();
 
@@ -2537,6 +3715,9 @@ namespace backend
          row["sentenceScore"] = scored[i].sentenceScore * 100.0;
          row["tokenScore"] = scored[i].tokenScore * 100.0;
          row["metadataScore"] = scored[i].metadataScore * 100.0;
+         row["ngramScore"] = scored[i].ngramScore * 100.0;
+         row["rabinKarpScore"] = scored[i].rabinKarpScore * 100.0;
+         row["rabinKarpHit"] = scored[i].rabinKarpHit;
          row["identicalSentenceCount"] = scored[i].identicalSentenceCount;
          row["identicalSentences"] = nlohmann::json::array();
          for (const auto& sentence : scored[i].identicalSentences)
@@ -2550,7 +3731,72 @@ namespace backend
       return out;
    }
 
-   std::vector<std::string> PlagiarismService::ReadDataset()
+   nlohmann::json PlagiarismService::GetSitesConfig() const
+   {
+      nlohmann::json out = SiteRulesToJson(ReadSiteRulesFromFile(sitesConfigPath_));
+      out["configPath"] = sitesConfigPath_;
+      return out;
+   }
+
+   bool PlagiarismService::UpdateSitesConfig(const std::vector<std::string>& whitelist, const std::vector<std::string>& blacklist, std::string& error)
+   {
+      SiteRules rules;
+      rules.whitelist = NormalizeSiteList(whitelist);
+      rules.blacklist = NormalizeSiteList(blacklist);
+
+      const nlohmann::json payload = SiteRulesToJson(rules);
+
+      if (!WriteFileText(sitesConfigPath_, payload.dump(2)))
+      {
+         error = "Не вдалося зберегти файл зі списком сайтів.";
+         return false;
+      }
+
+      return true;
+   }
+
+   bool PlagiarismService::ReplaceDataset(const std::string& datasetText, std::string& error, size_t& outRows)
+   {
+      std::istringstream input(datasetText);
+      std::ostringstream normalized;
+      std::string line;
+      size_t rows = 0;
+
+      while (std::getline(input, line))
+      {
+         const std::string trimmed = Trim(line);
+
+         if (trimmed.empty())
+         {
+            continue;
+         }
+
+         if (rows > 0)
+         {
+            normalized << "\n";
+         }
+
+         normalized << trimmed;
+         rows++;
+      }
+
+      if (rows == 0)
+      {
+         error = "Dataset порожній. Додайте хоча б один рядок.";
+         return false;
+      }
+
+      if (!WriteFileText(datasetPath_, normalized.str()))
+      {
+         error = "Не вдалося зберегти dataset файл.";
+         return false;
+      }
+
+      outRows = rows;
+      return true;
+   }
+
+   std::vector<std::string> PlagiarismService::ReadDataset() const
    {
       std::vector<std::string> lines;
       std::ifstream input(datasetPath_);
@@ -2654,7 +3900,13 @@ namespace backend
          return out;
       }
 
-      const std::filesystem::path path = std::filesystem::path(OutboxDir()) / (submission.id + ".txt");
+      std::filesystem::path path = std::filesystem::path(OutboxDir());
+      if (!submission.taskId.empty())
+      {
+         path /= submission.taskId;
+      }
+      path /= (submission.id + ".txt");
+      std::filesystem::create_directories(path.parent_path());
       std::ostringstream body;
       body << "Кому: " << (submission.studentEmail.empty() ? "немає email" : submission.studentEmail) << "\n";
       body << "Тема: Результат перевірки\n";

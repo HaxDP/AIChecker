@@ -152,6 +152,8 @@ namespace backend
       nlohmann::json out;
       out["id"] = item.id;
       out["taskId"] = item.taskId;
+      out["studentUserId"] = item.studentUserId;
+      out["classroomStudentLink"] = item.classroomStudentLink;
       out["studentName"] = item.studentName;
       out["studentEmail"] = item.studentEmail.empty() ? "Немає (потрібен scope classroom.profile.emails)" : item.studentEmail;
       out["repositoryUrl"] = item.repositoryUrl;

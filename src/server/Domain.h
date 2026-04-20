@@ -28,6 +28,8 @@ namespace backend
    {
       std::string id;
       std::string taskId;
+      std::string studentUserId;
+      std::string classroomStudentLink;
       std::string studentName;
       std::string studentEmail;
       std::string repositoryUrl;

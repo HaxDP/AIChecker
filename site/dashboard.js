@@ -5,8 +5,15 @@ const state = {
    currentTaskTitle: "",
    statusFilter: "all",
    selectedSubmissionId: null,
-   submissions: []
+   submissions: [],
+   aiReportExpanded: true
 };
+
+const dashboardLayout = document.getElementById("app");
+const leftPanelResizeHandle = document.getElementById("leftPanelResizeHandle");
+const rightPanelResizeHandle = document.getElementById("rightPanelResizeHandle");
+const leftPanelWidthStorageKey = "aichecker.leftPanelWidth";
+const rightPanelWidthStorageKey = "aichecker.rightPanelWidth";
 
 const userBox = document.getElementById("userBox");
 const classesList = document.getElementById("classesList");
@@ -18,25 +25,49 @@ const logBox = document.getElementById("logBox");
 const checkProgress = document.getElementById("checkProgress");
 
 const pullBtn = document.getElementById("pullBtn");
+const openTaskClassroomBtn = document.getElementById("openTaskClassroomBtn");
 const runChecksAllBtn = document.getElementById("runChecksAllBtn");
+const editSitesBtn = document.getElementById("editSitesBtn");
+const uploadDatasetBtn = document.getElementById("uploadDatasetBtn");
 const sendGradesBtn = document.getElementById("sendGradesBtn");
 const sendCommentsBtn = document.getElementById("sendCommentsBtn");
 const exportZipBtn = document.getElementById("exportZipBtn");
+const datasetUploadInput = document.getElementById("datasetUploadInput");
 
 const pullOneBtn = document.getElementById("pullOneBtn");
-const sendGradeOneBtn = document.getElementById("sendGradeOneBtn");
 const sendCommentOneBtn = document.getElementById("sendCommentOneBtn");
 const exportOneBtn = document.getElementById("exportOneBtn");
 const runChecksOneBtn = document.getElementById("runChecksOneBtn");
 const saveNotesBtn = document.getElementById("saveNotesBtn");
+const openClassroomBtn = document.getElementById("openClassroomBtn");
 
 const selectedStudentCard = document.getElementById("selectedStudentCard");
-const gradeInput = document.getElementById("gradeInput");
-const allowLateMaxGrade = document.getElementById("allowLateMaxGrade");
 const teacherCommentInput = document.getElementById("teacherCommentInput");
 const aiReportBox = document.getElementById("aiReportBox");
+const aiReportToggleBtn = document.getElementById("aiReportToggleBtn");
 const statusFilterMenu = document.getElementById("statusFilterMenu");
 const checkingSubmissionIds = new Set();
+
+function readStoredPanelWidth(storageKey) {
+   try {
+      const raw = window.localStorage.getItem(storageKey);
+      if (!raw) {
+         return null;
+      }
+
+      const parsed = Number.parseInt(raw, 10);
+      return Number.isNaN(parsed) ? null : parsed;
+   } catch {
+      return null;
+   }
+}
+
+function saveStoredPanelWidth(storageKey, width) {
+   try {
+      window.localStorage.setItem(storageKey, String(Math.round(width)));
+   } catch {
+   }
+}
 
 function setCheckProgress(text, visible) {
    if (!checkProgress) {
@@ -73,12 +104,162 @@ async function apiPost(path, body) {
    return await res.json();
 }
 
+function splitSiteList(raw) {
+   const text = String(raw || "");
+   const parts = text.split(/[\n,;\t\r]+/g);
+   const out = [];
+
+   for (const part of parts) {
+      const value = part.trim();
+      if (value.length > 0) {
+         out.push(value);
+      }
+   }
+
+   return out;
+}
+
 function asList(items) {
    if (!Array.isArray(items) || items.length === 0) {
       return "- немає";
    }
 
    return items.map((item) => "- " + item).join("\n");
+}
+
+function firstFailedRow(rows) {
+   if (!Array.isArray(rows)) {
+      return null;
+   }
+
+   for (const row of rows) {
+      if (row && row.ok === false) {
+         return row;
+      }
+   }
+
+   return null;
+}
+
+function buildGradeFailureMessage(row, fallbackMessage) {
+   if (row && row.reason === "project_permission_denied") {
+      const manualUrl = row.manualUrl ? " Відкрити завдання в Classroom: " + row.manualUrl : "";
+      return "Google Classroom API блокує зміну оцінки для цього завдання (ProjectPermissionDenied). Потрібно ставити оцінку вручну в Classroom або використовувати coursework, створений цим самим Google Cloud проектом." + manualUrl;
+   }
+
+   if (row && row.message) {
+      return row.message;
+   }
+
+   return fallbackMessage || "Не вдалося надіслати оцінку";
+}
+
+function splitTaskId(taskId) {
+   const raw = String(taskId || "");
+   const marker = "__";
+   const index = raw.indexOf(marker);
+
+   if (index < 0) {
+      return null;
+   }
+
+   const courseId = raw.slice(0, index);
+   const courseWorkId = raw.slice(index + marker.length);
+
+   if (!courseId || !courseWorkId) {
+      return null;
+   }
+
+   return { courseId, courseWorkId };
+}
+
+function encodeClassroomPathId(rawId) {
+   const text = String(rawId || "");
+   if (!text) {
+      return "";
+   }
+
+   try {
+      const encoded = window.btoa(text);
+      return encoded.replace(/=+$/g, "").replace(/\+/g, "-").replace(/\//g, "_");
+   } catch {
+      return "";
+   }
+}
+
+function buildClassroomTeacherUrl(taskId) {
+   const parsed = splitTaskId(taskId);
+
+   if (!parsed) {
+      return "";
+   }
+
+   const encodedCourseId = encodeClassroomPathId(parsed.courseId);
+   const encodedCourseWorkId = encodeClassroomPathId(parsed.courseWorkId);
+
+   if (!encodedCourseId || !encodedCourseWorkId) {
+      return "";
+   }
+
+   return "https://classroom.google.com/c/" + encodedCourseId + "/a/" + encodedCourseWorkId + "/submissions/by-status/and-sort-last-name/all/all";
+}
+
+function buildClassroomStudentUrl(taskId, submission) {
+   const baseUrl = buildClassroomTeacherUrl(taskId);
+
+   const directLink = submission && submission.classroomStudentLink
+      ? String(submission.classroomStudentLink).trim()
+      : "";
+
+   if (directLink) {
+      return directLink;
+   }
+
+   // Classroom web expects a student filter token derived from submission id.
+   const submissionId = submission && submission.id ? submission.id : "";
+   const studentFilterTokenRaw = String(submissionId || "") + "Z";
+   const encodedStudentId = encodeClassroomPathId(studentFilterTokenRaw);
+
+   if (!baseUrl || !encodedStudentId) {
+      return "";
+   }
+
+   return baseUrl.replace("/all/all", "/student/" + encodedStudentId);
+}
+
+function openUrlReliable(url) {
+   const normalized = String(url || "").trim();
+
+   if (!normalized) {
+      return false;
+   }
+
+   const popup = window.open(normalized, "_blank", "noopener,noreferrer");
+
+   if (popup && !popup.closed) {
+      popup.opener = null;
+      return true;
+   }
+
+   return false;
+}
+
+function applySectionToggleState(button, body, expanded) {
+   if (!button || !body) {
+      return;
+   }
+
+   const arrow = button.querySelector(".section-toggle-arrow");
+   button.setAttribute("aria-expanded", expanded ? "true" : "false");
+   body.classList.toggle("hidden", !expanded);
+
+   if (arrow) {
+      arrow.textContent = expanded ? "▾" : "▸";
+   }
+}
+
+function renderToggleSections() {
+   applySectionToggleState(aiReportToggleBtn, aiReportBox, state.aiReportExpanded);
 }
 
 function formatAiReportForDisplay(rawReport) {
@@ -186,7 +367,6 @@ function renderSelectedStudentPanel() {
 
    if (!sub) {
       selectedStudentCard.textContent = "Виберіть студента зі списку.";
-      gradeInput.value = 4;
       teacherCommentInput.value = "";
       aiReportBox.textContent = "-";
       return;
@@ -199,7 +379,6 @@ function renderSelectedStudentPanel() {
       "Репозиторій: " + (sub.repositoryUrl || "немає") + "\n" +
       "Статус: " + workflowLabel(status);
 
-   gradeInput.value = sub.grade > 0 ? sub.grade : (sub.late ? 4 : 5);
    teacherCommentInput.value = sub.teacherComment || sub.feedback || "";
    aiReportBox.textContent = formatAiReportForDisplay(sub.aiReport);
 }
@@ -254,9 +433,6 @@ function renderSubmissions() {
          pl.textContent = Number(sub.plagiarismScore || 0).toFixed(1);
       }
 
-      const grade = document.createElement("td");
-      grade.textContent = sub.grade > 0 ? String(sub.grade) : "-";
-
       const status = document.createElement("td");
       const statusValue = workflowStatus(sub);
       status.innerHTML = "<span class='status-pill status-" + statusValue + "'>" + workflowLabel(statusValue) + "</span>";
@@ -264,7 +440,6 @@ function renderSubmissions() {
       tr.appendChild(student);
       tr.appendChild(ai);
       tr.appendChild(pl);
-      tr.appendChild(grade);
       tr.appendChild(status);
       submissionsTableBody.appendChild(tr);
    }
@@ -319,6 +494,7 @@ async function loadTasks(classId, className) {
       button.onclick = async function() {
          state.currentTaskId = t.id;
          state.currentTaskTitle = t.title;
+         state.selectedSubmissionId = null;
          await reloadSubmissions();
       };
       tasksList.appendChild(button);
@@ -382,6 +558,86 @@ pullBtn.onclick = async function() {
    log("Отримано репозиторії: всього=" + total + ", успішно=" + success + ", пропущено=" + skipped);
 };
 
+editSitesBtn.onclick = async function() {
+   try {
+      const current = await apiGet("/api/review/plagiarism/sites");
+      if (!current.ok) {
+         log(current.message || "Не вдалося отримати whitelist/blacklist");
+         return;
+      }
+
+      const whitelistInput = window.prompt(
+         "Whitelist сайтів (через кому або новий рядок):",
+         Array.isArray(current.whitelist) ? current.whitelist.join("\n") : ""
+      );
+
+      if (whitelistInput === null) {
+         return;
+      }
+
+      const blacklistInput = window.prompt(
+         "Blacklist сайтів (через кому або новий рядок):",
+         Array.isArray(current.blacklist) ? current.blacklist.join("\n") : ""
+      );
+
+      if (blacklistInput === null) {
+         return;
+      }
+
+      const saved = await apiPost("/api/review/plagiarism/sites", {
+         whitelist: splitSiteList(whitelistInput),
+         blacklist: splitSiteList(blacklistInput)
+      });
+
+      if (!saved.ok) {
+         log(saved.message || "Не вдалося зберегти whitelist/blacklist");
+         return;
+      }
+
+      const whiteCount = Array.isArray(saved.whitelist) ? saved.whitelist.length : 0;
+      const blackCount = Array.isArray(saved.blacklist) ? saved.blacklist.length : 0;
+      log("Оновлено списки сайтів: whitelist=" + whiteCount + ", blacklist=" + blackCount);
+   } catch (e) {
+      log("Помилка оновлення списків сайтів");
+   }
+};
+
+uploadDatasetBtn.onclick = function() {
+   if (!datasetUploadInput) {
+      log("Поле завантаження dataset не знайдено");
+      return;
+   }
+
+   datasetUploadInput.value = "";
+   datasetUploadInput.click();
+};
+
+if (datasetUploadInput) {
+   datasetUploadInput.onchange = async function() {
+      const file = datasetUploadInput.files && datasetUploadInput.files[0];
+
+      if (!file) {
+         return;
+      }
+
+      try {
+         const text = await file.text();
+         const data = await apiPost("/api/review/plagiarism/dataset/upload", {
+            datasetText: text
+         });
+
+         if (!data.ok) {
+            log(data.message || "Не вдалося завантажити dataset");
+            return;
+         }
+
+         log("Dataset оновлено з файлу: " + file.name + " | рядків=" + Number(data.rows || 0));
+      } catch (e) {
+         log("Помилка читання/завантаження dataset файлу");
+      }
+   };
+}
+
 runChecksAllBtn.onclick = async function() {
    const ok = await requireTaskAndSelection(false);
    if (!ok) {
@@ -408,8 +664,8 @@ runChecksAllBtn.onclick = async function() {
       renderSubmissions();
 
       try {
-         const ai = await apiPost("/api/review/ai", { submissionId: sub.id });
-         const pl = await apiPost("/api/review/plagiarism", { submissionId: sub.id });
+         const ai = await apiPost("/api/review/ai", { submissionId: sub.id, taskId: state.currentTaskId });
+         const pl = await apiPost("/api/review/plagiarism", { submissionId: sub.id, taskId: state.currentTaskId });
 
          sub.aiScore = Number(ai.aiScore || 0);
          sub.plagiarismScore = Number(pl.plagiarismScore || 0);
@@ -428,21 +684,26 @@ runChecksAllBtn.onclick = async function() {
    await reloadSubmissions();
 };
 
-sendGradesBtn.onclick = async function() {
-   const ok = await requireTaskAndSelection(false);
-   if (!ok) {
-      return;
-   }
+if (sendGradesBtn) {
+   sendGradesBtn.onclick = async function() {
+      const ok = await requireTaskAndSelection(false);
+      if (!ok) {
+         return;
+      }
 
-   const data = await apiPost("/api/tasks/" + state.currentTaskId + "/send-grades", {});
-   if (!data.ok) {
-      log(data.message || "Не вдалося надіслати оцінки");
-      return;
-   }
+      const data = await apiPost("/api/tasks/" + state.currentTaskId + "/send-grades", {});
+      const failed = Number(data.failed || 0);
+      const firstFailed = firstFailedRow(data.rows);
 
-   log("Надіслано оцінки (усім): надіслано=" + data.sent + ", пропущено=" + data.skipped);
-   await reloadSubmissions();
-};
+      if (!data.ok && failed > 0) {
+         log("Не всі оцінки надіслані: помилок=" + failed + " | " + buildGradeFailureMessage(firstFailed, data.message));
+         return;
+      }
+
+      log("Надіслано оцінки (усім): надіслано=" + Number(data.sent || 0) + ", пропущено=" + Number(data.skipped || 0) + ", помилок=" + failed);
+      await reloadSubmissions();
+   };
+}
 
 sendCommentsBtn.onclick = async function() {
    const ok = await requireTaskAndSelection(false);
@@ -450,13 +711,18 @@ sendCommentsBtn.onclick = async function() {
       return;
    }
 
-   const data = await apiPost("/api/tasks/" + state.currentTaskId + "/send-comments-email", {});
-   if (!data.ok) {
-      log(data.message || "Не вдалося надіслати коментарі");
+   const data = await apiPost("/api/tasks/" + state.currentTaskId + "/send-comments-email", {
+      taskTitle: state.currentTaskTitle
+   });
+   const failed = Number(data.failed || 0);
+   const firstFailed = firstFailedRow(data.rows);
+
+   if (!data.ok && failed > 0) {
+      log("Не всі коментарі надіслані: помилок=" + failed + (firstFailed && firstFailed.message ? " | " + firstFailed.message : ""));
       return;
    }
 
-   log("Надіслано коментарі (усім): " + data.sent);
+   log("Оброблено коментарі (усім): успішно=" + Number(data.sent || 0) + ", помилок=" + failed);
    await reloadSubmissions();
 };
 
@@ -498,38 +764,6 @@ pullOneBtn.onclick = async function() {
    }
 };
 
-sendGradeOneBtn.onclick = async function() {
-   const sub = await requireTaskAndSelection(true);
-   if (!sub) {
-      return;
-   }
-
-   const grade = Number(gradeInput.value || 4);
-   const teacherComment = teacherCommentInput.value || "";
-
-   const finalize = await apiPost("/api/review/finalize", {
-      submissionId: sub.id,
-      grade,
-      feedback: teacherComment,
-      teacherComment,
-      allowLateMaxGrade: Boolean(allowLateMaxGrade.checked)
-   });
-
-   if (!finalize.submissionId) {
-      log(finalize.message || "Не вдалося підтвердити оцінку");
-      return;
-   }
-
-   const send = await apiPost("/api/tasks/" + state.currentTaskId + "/send-grades", { submissionId: sub.id });
-   if (!send.ok) {
-      log(send.message || "Не вдалося надіслати оцінку");
-      return;
-   }
-
-   log("Надіслано оцінку (обраному): " + sub.studentName);
-   await reloadSubmissions();
-};
-
 sendCommentOneBtn.onclick = async function() {
    const sub = await requireTaskAndSelection(true);
    if (!sub) {
@@ -540,6 +774,7 @@ sendCommentOneBtn.onclick = async function() {
 
    const notes = await apiPost("/api/review/notes", {
       submissionId: sub.id,
+      taskId: state.currentTaskId,
       teacherComment
    });
 
@@ -548,8 +783,22 @@ sendCommentOneBtn.onclick = async function() {
       return;
    }
 
-   const data = await apiPost("/api/review/send-email", { submissionId: sub.id });
-   log("Надіслано коментар (обраному): " + (data.message || "виконано"));
+   const data = await apiPost("/api/review/send-email", {
+      submissionId: sub.id,
+      taskId: state.currentTaskId,
+      taskTitle: state.currentTaskTitle
+   });
+   if (!data.ok) {
+      log("Не вдалося надіслати коментар (обраному): " + (data.message || "помилка"));
+      return;
+   }
+
+   const message = String(data.message || "");
+   if (message.includes("Gmail не надіслав")) {
+      log("Коментар не надіслано через Gmail: " + message);
+   } else {
+      log("Надіслано коментар (обраному): " + (message || "виконано"));
+   }
    await reloadSubmissions();
 };
 
@@ -582,8 +831,8 @@ runChecksOneBtn.onclick = async function() {
    setCheckProgress("Перевірка AI/PL для: " + sub.studentName, true);
 
    try {
-      const ai = await apiPost("/api/review/ai", { submissionId: sub.id });
-      const pl = await apiPost("/api/review/plagiarism", { submissionId: sub.id });
+      const ai = await apiPost("/api/review/ai", { submissionId: sub.id, taskId: state.currentTaskId });
+      const pl = await apiPost("/api/review/plagiarism", { submissionId: sub.id, taskId: state.currentTaskId });
       log("Перевірено: " + sub.studentName + " | AI=" + Number(ai.aiScore || 0).toFixed(1) + "% PL=" + Number(pl.plagiarismScore || 0).toFixed(1) + "%");
       await reloadSubmissions();
    } finally {
@@ -600,6 +849,7 @@ saveNotesBtn.onclick = async function() {
 
    const notes = await apiPost("/api/review/notes", {
       submissionId: sub.id,
+      taskId: state.currentTaskId,
       teacherComment: teacherCommentInput.value || ""
    });
 
@@ -611,6 +861,202 @@ saveNotesBtn.onclick = async function() {
    log("Збережено коментар для: " + sub.studentName);
    await reloadSubmissions();
 };
+
+if (openTaskClassroomBtn) {
+   openTaskClassroomBtn.onclick = function() {
+      if (!state.currentTaskId) {
+         log("Спочатку оберіть завдання");
+         return;
+      }
+
+      const taskUrl = buildClassroomTeacherUrl(state.currentTaskId);
+
+      if (!taskUrl) {
+         log("Не вдалося зібрати посилання Classroom для цього завдання");
+         return;
+      }
+
+      if (!openUrlReliable(taskUrl)) {
+         log("Браузер заблокував відкриття нового вікна. Дозвольте pop-up для цього сайту.");
+      }
+   };
+}
+
+if (openClassroomBtn) {
+   openClassroomBtn.onclick = function() {
+      const sub = selectedSubmission();
+
+      if (!sub) {
+         log("Оберіть студента у таблиці");
+         return;
+      }
+
+      const taskUrl = buildClassroomStudentUrl(state.currentTaskId, sub);
+      if (!taskUrl) {
+         log("Не вдалося зібрати student-посилання Classroom для обраної роботи.");
+         return;
+      }
+
+      if (!openUrlReliable(taskUrl)) {
+         log("Браузер заблокував відкриття нового вікна. Дозвольте pop-up для цього сайту.");
+      }
+   };
+}
+
+if (aiReportToggleBtn) {
+   aiReportToggleBtn.onclick = function() {
+      state.aiReportExpanded = !state.aiReportExpanded;
+      renderToggleSections();
+   };
+}
+
+function initLeftPanelResize() {
+   if (!dashboardLayout || !leftPanelResizeHandle) {
+      return;
+   }
+
+   function clampLeftPanelWidth(width) {
+      const minWidth = 220;
+      const maxWidth = Math.max(minWidth, Math.floor(window.innerWidth * 0.35));
+      const numericWidth = Number(width || 0);
+      return Math.max(minWidth, Math.min(maxWidth, numericWidth));
+   }
+
+   function applyLeftPanelWidth(width) {
+      const clamped = clampLeftPanelWidth(width);
+      dashboardLayout.style.setProperty("--left-panel-width", Math.round(clamped) + "px");
+      saveStoredPanelWidth(leftPanelWidthStorageKey, clamped);
+   }
+
+   const restoredLeftWidth = readStoredPanelWidth(leftPanelWidthStorageKey);
+   if (restoredLeftWidth !== null && !window.matchMedia("(max-width: 1200px)").matches) {
+      applyLeftPanelWidth(restoredLeftWidth);
+   }
+
+   let isResizing = false;
+
+   leftPanelResizeHandle.addEventListener("mousedown", function(event) {
+      if (window.matchMedia("(max-width: 1200px)").matches) {
+         return;
+      }
+
+      isResizing = true;
+      dashboardLayout.classList.add("resizing");
+      event.preventDefault();
+   });
+
+   window.addEventListener("mousemove", function(event) {
+      if (!isResizing) {
+         return;
+      }
+
+      const nextWidth = event.clientX - 12;
+      applyLeftPanelWidth(nextWidth);
+   });
+
+   window.addEventListener("mouseup", function() {
+      if (!isResizing) {
+         return;
+      }
+
+      isResizing = false;
+      dashboardLayout.classList.remove("resizing");
+   });
+
+   window.addEventListener("resize", function() {
+      if (window.matchMedia("(max-width: 1200px)").matches) {
+         dashboardLayout.style.removeProperty("--left-panel-width");
+         return;
+      }
+
+      const current = getComputedStyle(dashboardLayout).getPropertyValue("--left-panel-width");
+      const numeric = Number.parseInt(current, 10);
+
+      if (!Number.isNaN(numeric)) {
+         applyLeftPanelWidth(numeric);
+         return;
+      }
+
+      const restored = readStoredPanelWidth(leftPanelWidthStorageKey);
+      if (restored !== null) {
+         applyLeftPanelWidth(restored);
+      }
+   });
+}
+
+function initRightPanelResize() {
+   if (!dashboardLayout || !rightPanelResizeHandle) {
+      return;
+   }
+
+   function clampRightPanelWidth(width) {
+      const minWidth = 300;
+      const maxWidth = Math.max(minWidth, Math.floor(window.innerWidth * 0.65));
+      const numericWidth = Number(width || 0);
+      return Math.max(minWidth, Math.min(maxWidth, numericWidth));
+   }
+
+   function applyRightPanelWidth(width) {
+      const clamped = clampRightPanelWidth(width);
+      dashboardLayout.style.setProperty("--right-panel-width", Math.round(clamped) + "px");
+      saveStoredPanelWidth(rightPanelWidthStorageKey, clamped);
+   }
+
+    const restoredRightWidth = readStoredPanelWidth(rightPanelWidthStorageKey);
+    if (restoredRightWidth !== null && !window.matchMedia("(max-width: 1200px)").matches) {
+      applyRightPanelWidth(restoredRightWidth);
+   }
+
+   let isResizing = false;
+
+   rightPanelResizeHandle.addEventListener("mousedown", function(event) {
+      if (window.matchMedia("(max-width: 1200px)").matches) {
+         return;
+      }
+
+      isResizing = true;
+      dashboardLayout.classList.add("resizing");
+      event.preventDefault();
+   });
+
+   window.addEventListener("mousemove", function(event) {
+      if (!isResizing) {
+         return;
+      }
+
+      const nextWidth = window.innerWidth - event.clientX - 12;
+      applyRightPanelWidth(nextWidth);
+   });
+
+   window.addEventListener("mouseup", function() {
+      if (!isResizing) {
+         return;
+      }
+
+      isResizing = false;
+      dashboardLayout.classList.remove("resizing");
+   });
+
+   window.addEventListener("resize", function() {
+      if (window.matchMedia("(max-width: 1200px)").matches) {
+         dashboardLayout.style.removeProperty("--right-panel-width");
+         return;
+      }
+
+      const current = getComputedStyle(dashboardLayout).getPropertyValue("--right-panel-width");
+      const numeric = Number.parseInt(current, 10);
+
+      if (!Number.isNaN(numeric)) {
+         applyRightPanelWidth(numeric);
+         return;
+      }
+
+      const restored = readStoredPanelWidth(rightPanelWidthStorageKey);
+      if (restored !== null) {
+         applyRightPanelWidth(restored);
+      }
+   });
+}
 
 statusFilterMenu.addEventListener("click", async function(event) {
    const target = event.target;
@@ -634,6 +1080,9 @@ statusFilterMenu.addEventListener("click", async function(event) {
       return;
    }
 
+   renderToggleSections();
+   initLeftPanelResize();
+   initRightPanelResize();
    renderStatusFilterMenu();
    await loadClasses();
 })();

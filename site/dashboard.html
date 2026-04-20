@@ -9,6 +9,7 @@
 <body>
    <div id="app" class="dashboard-layout">
       <aside class="panel left-panel">
+         <div id="leftPanelResizeHandle" class="left-panel-resize-handle" title="Потягніть, щоб змінити ширину лівої панелі"></div>
          <h1>AIChecker</h1>
          <div id="userBox" class="user-box"></div>
 
@@ -34,8 +35,10 @@
             <h2 id="reviewTitle">Список студентів</h2>
             <div class="toolbar-actions">
                <button id="pullBtn">Отримати репозиторії</button>
+               <button id="openTaskClassroomBtn">Відкрити завдання</button>
                <button id="runChecksAllBtn">Перевірити на AI та плагіат</button>
-               <button id="sendGradesBtn">Надіслати оцінки</button>
+               <button id="editSitesBtn">Whitelist / Blacklist сайтів</button>
+               <button id="uploadDatasetBtn">Завантажити PL dataset</button>
                <button id="sendCommentsBtn">Надіслати коментарі</button>
                <button id="exportZipBtn">Експорт ZIP</button>
             </div>
@@ -48,16 +51,18 @@
                   <th>Студент</th>
                   <th>AI %</th>
                   <th>PL %</th>
-                  <th>Оцінка</th>
                   <th>Статус</th>
                </tr>
             </thead>
             <tbody></tbody>
          </table>
 
+         <input id="datasetUploadInput" class="hidden" type="file" accept=".txt,.md,.csv,.json">
+
       </main>
 
       <aside class="panel right-panel">
+         <div id="rightPanelResizeHandle" class="right-panel-resize-handle" title="Потягніть, щоб змінити ширину панелі"></div>
          <h2>Обраний студент</h2>
          <div id="selectedStudentCard" class="selected-card">
             Виберіть студента зі списку.
@@ -65,27 +70,24 @@
 
          <div class="right-actions">
             <button id="pullOneBtn">Отримати репозиторій</button>
-            <button id="sendGradeOneBtn">Надіслати оцінку</button>
             <button id="sendCommentOneBtn">Надіслати коментар</button>
             <button id="exportOneBtn">Експорт ZIP</button>
             <button id="runChecksOneBtn">Запустити AI + PL</button>
          </div>
 
-         <label for="gradeInput">Оцінка</label>
-         <input id="gradeInput" type="number" min="2" max="5" step="1" value="4">
-
-         <label class="checkbox-line">
-            <input id="allowLateMaxGrade" type="checkbox">
-            Дозволити 5 для запізнілої роботи
-         </label>
-
          <label for="teacherCommentInput">Коментар для студента</label>
-         <textarea id="teacherCommentInput" rows="5" placeholder="Введіть коментар..." ></textarea>
+         <textarea id="teacherCommentInput" rows="5" placeholder="Введіть коментар..."></textarea>
 
-         <button id="saveNotesBtn">Зберегти коментар</button>
+         <button id="saveNotesBtn" type="button">Зберегти коментар</button>
+         <button id="openClassroomBtn" type="button">Відкрити завдання</button>
 
-         <h3>Детальний AI-звіт</h3>
-         <pre id="aiReportBox" class="report-box">-</pre>
+         <section class="ai-report-section">
+            <button id="aiReportToggleBtn" class="section-toggle" type="button" aria-expanded="true">
+               <span>Детальний AI-звіт</span>
+               <span class="section-toggle-arrow">▾</span>
+            </button>
+            <pre id="aiReportBox" class="report-box">-</pre>
+         </section>
       </aside>
    </div>
 

@@ -4,7 +4,6 @@
 #include <fstream>
 #include <functional>
 #include <unordered_map>
-#include <sstream>
 #include <string>
 #include <vector>
 
@@ -19,62 +18,11 @@ std::string Trim(const std::string& value) {
     return value.substr(first, last - first + 1);
 }
 
-bool ParseBool(const std::string& value, bool defaultValue) {
-    const std::string normalized = Trim(value);
-    if (normalized == "1" || normalized == "true" || normalized == "True") {
-        return true;
-    }
-    if (normalized == "0" || normalized == "false" || normalized == "False") {
-        return false;
-    }
-    return defaultValue;
-}
-
-int ParseInt(const std::string& value, int defaultValue) {
-    try {
-        return std::stoi(Trim(value));
-    } catch (...) {
-        return defaultValue;
-    }
-}
-
-float ParseFloat(const std::string& value, float defaultValue) {
-    try {
-        return std::stof(Trim(value));
-    } catch (...) {
-        return defaultValue;
-    }
-}
-
 using Reader = std::function<void(config::AppSettings&, const std::string&)>;
 using Writer = std::function<std::string(const config::AppSettings&)>;
 
 const std::unordered_map<std::string, Reader>& BuildReaders() {
     static const std::unordered_map<std::string, Reader> readers = {
-        {"theme.dark", [](config::AppSettings& settings, const std::string& value) {
-            settings.darkTheme = ParseBool(value, settings.darkTheme);
-        }},
-        {"ui.scale", [](config::AppSettings& settings, const std::string& value) {
-            settings.uiScale = ParseFloat(value, settings.uiScale);
-        }},
-        {"window.width", [](config::AppSettings& settings, const std::string& value) {
-            settings.windowWidth = ParseInt(value, settings.windowWidth);
-        }},
-        {"window.height", [](config::AppSettings& settings, const std::string& value) {
-            settings.windowHeight = ParseInt(value, settings.windowHeight);
-        }},
-        {"classroom.useApiImport", [](config::AppSettings& settings, const std::string& value) {
-            settings.classroomUseApiImport = ParseBool(value, settings.classroomUseApiImport);
-        }},
-        {"classroom.courseId", [](config::AppSettings& settings, const std::string& value) {
-            settings.classroomCourseId = value;
-        }},
-        {"classroom.courseWorkId", [](config::AppSettings& settings, const std::string& value) {
-            settings.classroomCourseWorkId = value;
-        }},
-        {"classroom.studentGroup", [](config::AppSettings& settings, const std::string& value) {
-            settings.classroomStudentGroup = value;
-        }},
         {"ollama.baseUrl", [](config::AppSettings& settings, const std::string& value) {
             settings.ollamaBaseUrl = value;
         }},
@@ -99,30 +47,6 @@ const std::unordered_map<std::string, Reader>& BuildReaders() {
 
 const std::vector<std::pair<std::string, Writer>>& BuildWriters() {
     static const std::vector<std::pair<std::string, Writer>> writers = {
-        {"theme.dark", [](const config::AppSettings& settings) {
-            return settings.darkTheme ? "true" : "false";
-        }},
-        {"ui.scale", [](const config::AppSettings& settings) {
-            return std::to_string(settings.uiScale);
-        }},
-        {"window.width", [](const config::AppSettings& settings) {
-            return std::to_string(settings.windowWidth);
-        }},
-        {"window.height", [](const config::AppSettings& settings) {
-            return std::to_string(settings.windowHeight);
-        }},
-        {"classroom.useApiImport", [](const config::AppSettings& settings) {
-            return settings.classroomUseApiImport ? "true" : "false";
-        }},
-        {"classroom.courseId", [](const config::AppSettings& settings) {
-            return settings.classroomCourseId;
-        }},
-        {"classroom.courseWorkId", [](const config::AppSettings& settings) {
-            return settings.classroomCourseWorkId;
-        }},
-        {"classroom.studentGroup", [](const config::AppSettings& settings) {
-            return settings.classroomStudentGroup;
-        }},
         {"ollama.baseUrl", [](const config::AppSettings& settings) {
             return settings.ollamaBaseUrl;
         }},

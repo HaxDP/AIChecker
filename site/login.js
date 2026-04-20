@@ -57,7 +57,7 @@ async function loginWithGooglePopup()
    const client = window.google.accounts.oauth2.initTokenClient(
    {
       client_id: cfg.clientId,
-      scope: "openid email profile https://www.googleapis.com/auth/classroom.courses.readonly https://www.googleapis.com/auth/classroom.rosters.readonly https://www.googleapis.com/auth/classroom.coursework.students.readonly https://www.googleapis.com/auth/classroom.profile.emails https://www.googleapis.com/auth/gmail.send",
+      scope: "openid email profile https://www.googleapis.com/auth/classroom.courses.readonly https://www.googleapis.com/auth/classroom.rosters.readonly https://www.googleapis.com/auth/classroom.coursework.students https://www.googleapis.com/auth/classroom.profile.emails https://www.googleapis.com/auth/gmail.send",
       include_granted_scopes: true,
       callback: async function(tokenResponse)
       {

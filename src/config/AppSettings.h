@@ -5,16 +5,6 @@
 namespace config {
 
 struct AppSettings {
-    bool darkTheme = true;
-    float uiScale = 1.0f;
-    int windowWidth = 1600;
-    int windowHeight = 920;
-
-    bool classroomUseApiImport = true;
-    std::string classroomCourseId = "course-001";
-    std::string classroomCourseWorkId = "cw-001";
-    std::string classroomStudentGroup = "";
-
     std::string ollamaBaseUrl = "http://localhost:11434";
     std::string ollamaModel = "aichecker-llama3.2-3b:latest";
     std::string plagiarismServiceUrl = "";
